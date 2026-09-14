@@ -1,200 +1,349 @@
 #pragma once
 
 #include <Windows.h>
+#include <mutex>
 #include "../globals.hpp"
+#include "../mathlib/AngleMath.h"
 #include "AutoWall.h"
 #include "Utils.h"
-	
-void DoLegitAimbot(CUserCmd* cmd)
+
+namespace LegitAim
 {
-	static C_BasePlayer* lastTarget = nullptr;
-	static bool tempState = false;
-	static int smoothSteps = 0;
+	// SetupBones() writes at most this many matrices, and every bone index we
+	// get back has to stay inside the same bound.
+	inline constexpr int kMaxBones = 128;
 
-	bool keyDown;
-	getKeyState(Settings::Aimbot::aimbotKey, Settings::Aimbot::aimbotKeyStyle, &keyDown, henlo1, henlo2, henlo3);
+	// How close the crosshair has to be to the target before auto-fire is
+	// allowed, in degrees.
+	//
+	// Upstream counted smoothing ticks instead and fired once the counter
+	// reached smoothSteps.  With an exponential approach (a constant fraction
+	// of the *remaining* error per tick) the aim is never mathematically
+	// arrived after N ticks, so the counter said nothing about where the
+	// crosshair actually was.
+	inline constexpr float kAimReadyDegrees = 1.f;
 
-	if (!keyDown || !Settings::Aimbot::enableAimbot) { Settings::Aimbot::finalTarget = nullptr; smoothSteps = 0; return; }
-
-	if (Settings::Aimbot::lockOnTarget && (Settings::Aimbot::finalTarget && !Settings::Aimbot::finalTarget->IsAlive()))Settings::Aimbot::finalTarget = localPlayer;
-	if (Settings::Aimbot::finalTarget == localPlayer) { smoothSteps = 0; return; }
-
-	int selectedHitBox = 0;
-
-	Vector eyePos = localPlayer->EyePosition();
-	Vector finalPos;
-	bool isErrorModel = false;
-	bool canHit = false;
-	if (!Settings::Aimbot::lockOnTarget || !Settings::Aimbot::finalTarget || !Settings::Aimbot::finalTarget->IsAlive() || Settings::Aimbot::finalTarget->IsDormant()) // isNotLock or if final is bad, or dead
+	enum class Selection
 	{
-		Settings::Aimbot::finalTarget = nullptr;
-		float finalDistance = FLT_MAX;
-		for (int i = 0; i < ClientEntityList->GetHighestEntityIndex(); i++)
+		Distance = 0,
+		Health = 1,
+		Fov = 2,
+	};
+
+	[[nodiscard]] inline bool HasValidInterfaces()
+	{
+		return localPlayer != nullptr
+			&& EngineClient != nullptr
+			&& ClientEntityList != nullptr
+			&& ModelInfo != nullptr
+			&& GlobalVars != nullptr
+			&& EngineTrace != nullptr;
+	}
+
+	// Globals::screenWidth/Height stay zero until the game reports a
+	// resolution; dividing by them before that skews every FOV comparison.
+	[[nodiscard]] inline bool HasValidScreenSize()
+	{
+		return Globals::screenWidth > 0 && Globals::screenHeight > 0;
+	}
+
+	[[nodiscard]] inline bool IsFriend(C_BasePlayer* entity)
+	{
+		// lock_guard rather than a bare lock()/unlock() pair: the mutex is
+		// released on every path, including one added later that returns from
+		// the middle of the block.
+		const std::lock_guard<std::mutex> lock(Settings::friendListMutex);
+
+		// find() rather than walking the whole map -- and it replaces the old
+		// `friendList.find(entity) != friendList.find(entity)` check further
+		// down, which compared a value with itself, was therefore always false,
+		// and read the map without holding the mutex.
+		const auto it = Settings::friendList.find(entity);
+		return it != Settings::friendList.end() && it->second.first;
+	}
+
+	[[nodiscard]] inline bool IsTargetable(C_BasePlayer* entity)
+	{
+		if (!entity || !localPlayer || entity == localPlayer)
+			return false;
+
+		if (!entity->IsPlayer() || !entity->IsAlive() || entity->IsDormant())
+			return false;
+
+		if (!Settings::Aimbot::aimAtTeammates && entity->getTeamNum() == localPlayer->getTeamNum())
+			return false;
+
+		const bool isFriend = IsFriend(entity);
+
+		if (isFriend && !Settings::Aimbot::aimAtFriends && !Settings::Aimbot::onlyAimAtFriends)
+			return false;
+
+		if (Settings::Aimbot::onlyAimAtFriends && !isFriend)
+			return false;
+
+		return true;
+	}
+
+	// Resolves the world position to aim at for `entity`.
+	//
+	// Returns false instead of aiming at a garbage position whenever anything
+	// along the way is missing: the renderable, the model, the studio header,
+	// the bone setup, or the configured hitbox.  Upstream dereferenced
+	// GetClientRenderable() and GetStudiomodel() unchecked and indexed
+	// bones[selectedHitBox] with whatever the bone lookup happened to leave in
+	// that variable -- including the previous entity's index, or 0 on a miss.
+	[[nodiscard]] inline bool GetAimPosition(C_BasePlayer* entity, Vector& out)
+	{
+		if (!entity || !ModelInfo || !GlobalVars)
+			return false;
+
+		IClientRenderable* renderable = entity->GetClientRenderable();
+		if (!renderable)
+			return false;
+
+		const model_t* model = static_cast<const model_t*>(renderable->GetModel());
+		if (!model)
+			return false;
+
+		studiohdr_t* studioModel = ModelInfo->GetStudiomodel(model);
+		if (!studioModel)
+			return false;
+
+		// studiohdr_t::name is a fixed 64 byte field that the engine is not
+		// obliged to terminate, so bound the comparison explicitly.
+		if (_strnicmp(studioModel->name, "error.mdl", sizeof("error.mdl")) == 0)
 		{
-			C_BasePlayer* entity = (C_BasePlayer*)ClientEntityList->GetClientEntity(i);
-			if (!entity || !entity->IsAlive() || !entity->IsPlayer() || entity == localPlayer || entity->IsDormant())
+			// error.mdl has no usable skeleton; the eyes are the best we have.
+			out = entity->EyePosition();
+			return true;
+		}
+
+		const char* boneName = IntToBoneName(Settings::Aimbot::aimbotHitbox);
+		if (!boneName)
+			return false; // hitbox id outside the configured range
+
+		matrix3x4_t bones[kMaxBones];
+		if (!renderable->SetupBones(bones, kMaxBones, BONE_USED_BY_HITBOX, GlobalVars->curtime))
+			return false;
+
+		int boneIndex = -1;
+		if (!Studio_BoneIndexByName(studioModel, boneName, &boneIndex))
+			return false; // the model does not have that bone
+
+		if (boneIndex < 0 || boneIndex >= kMaxBones)
+			return false;
+
+		out = Vector(bones[boneIndex][0][3], bones[boneIndex][1][3], bones[boneIndex][2][3]);
+		return true;
+	}
+
+	// Distance in pixels between the target and the centre of the screen.
+	[[nodiscard]] inline bool GetFovDistance(const Vector& entPos, float& out)
+	{
+		if (!HasValidScreenSize())
+			return false;
+
+		Vector screenPos;
+		if (!WorldToScreen(entPos, screenPos))
+			return false;
+
+		screenPos.z = 0.f;
+		out = Vector(Globals::screenWidth / 2.f, Globals::screenHeight / 2.f, 0.f).DistTo(screenPos);
+		return true;
+	}
+
+	// Picks the best candidate according to Settings::Aimbot::aimbotSelection.
+	// Returns nullptr when nothing qualifies.
+	[[nodiscard]] inline C_BasePlayer* SelectTarget(const Vector& eyePos)
+	{
+		C_BasePlayer* best = nullptr;
+		float bestScore = FLT_MAX;
+
+		// Hoisted: this is a virtual call into the SDK, and it does not change
+		// while we walk the list.
+		const int highestEntityIndex = ClientEntityList->GetHighestEntityIndex();
+
+		for (int i = 0; i < highestEntityIndex; i++)
+		{
+			C_BasePlayer* entity = static_cast<C_BasePlayer*>(ClientEntityList->GetClientEntity(i));
+			if (!IsTargetable(entity))
 				continue;
 
-			if (!Settings::Aimbot::aimAtTeammates && entity->getTeamNum() == localPlayer->getTeamNum())
-				continue;
-			bool isFriend = false;
-			Settings::friendListMutex.lock();
-			for (auto var : Settings::friendList)
-			{
-				if (var.first == entity && var.second.first)
-				{
-					isFriend = true;
-					break;
-				}
-			}
-			Settings::friendListMutex.unlock();
-
-			if (isFriend && !Settings::Aimbot::aimAtFriends && !Settings::Aimbot::onlyAimAtFriends)
-				continue;
-			if (Settings::Aimbot::onlyAimAtFriends && !isFriend)
-				continue;
-
-			// This is an exemple of something you can do for a custom server.
-			/*entity->PushEntity();
-				Lua->GetField(-1, "GetNWInt");
-				Lua->Push(-2);
-
-				Lua->PushString("Buildmode");
-				Lua->Call(2, 1);
-				int buildMode = Lua->GetNumber(-1);
-				Lua->Pop(2);
-			if (buildMode) continue;*/
-#pragma message("THIS IS TO BE TESTED!!")
 			Vector entPos;
-			auto model = ((model_t*)entity->GetClientRenderable()->GetModel());
-			if (model && !_strcmpi(ModelInfo->GetStudiomodel(model)->name, "error.mdl"))
-			{
-				entPos = entity->EyePosition();
-				isErrorModel = true;
-			}
-			else {
-				// https://i.imgur.com/0WZNkbC.jpg
-				// https://i.imgur.com/rRxWCUN.jpeg
-				// 6 head
-				// 3 torso
-
-				isErrorModel = false;
-				matrix3x4_t bones[128];
-				if (!entity->GetClientRenderable()->SetupBones(bones, 128, BONE_USED_BY_HITBOX, GlobalVars->curtime))
-					continue;
-				//std::cout << ((model_t*)entity->GetClientRenderable()->GetModel())->name << std::endl;
-				auto bone = Studio_BoneIndexByName(ModelInfo->GetStudiomodel((const model_t*)entity->GetClientRenderable()->GetModel()), IntToBoneName(Settings::Aimbot::aimbotHitbox), &selectedHitBox);
-
-				entPos = Vector(bones[selectedHitBox][0][3], bones[selectedHitBox][1][3], bones[selectedHitBox][2][3]); // 6 = hitbox https://i.imgur.com/0WZNkbC.jpg
-			}
-			canHit = CanHit(entity, eyePos, entPos);
-			if (!canHit && Settings::Aimbot::aimbotAutoWall)
-				continue;
-			if (!Settings::Aimbot::aimAtFriends && Settings::friendList.find(entity) != Settings::friendList.find(entity))
+			if (!GetAimPosition(entity, entPos))
 				continue;
 
+			// CanHit() is a plain line-of-sight trace: the penetration maths it
+			// would need to deserve the "auto wall" name is not implemented
+			// (see AutoWall.h).  So today this option means "only consider
+			// targets I can actually see", which is why it rejects a target it
+			// cannot reach rather than accepting one behind a wall.
+			if (Settings::Aimbot::aimbotAutoWall && !CanHit(entity, eyePos, entPos))
+				continue;
 
-			float distance = FLT_MAX;
 			float fovDistance = FLT_MAX;
-			if (Settings::Aimbot::aimbotSelection == 0) // Distance
+			float score = FLT_MAX;
+
+			switch (static_cast<Selection>(Settings::Aimbot::aimbotSelection))
 			{
-				distance = localPlayer->GetAbsOrigin().DistTo(entPos);
-				if (distance > finalDistance)
+			case Selection::Distance:
+				score = localPlayer->GetAbsOrigin().DistTo(entPos);
+				break;
+
+			case Selection::Health:
+				score = static_cast<float>(entity->GetHealth());
+				break;
+
+			case Selection::Fov:
+				if (!GetFovDistance(entPos, fovDistance))
 					continue;
+				score = fovDistance;
+				break;
+
+			default:
+				// An out-of-range config value used to leave `distance` at
+				// FLT_MAX for every candidate, so the target ended up being
+				// whichever entity happened to come last in the list.  Fall
+				// back to the default mode instead.
+				score = localPlayer->GetAbsOrigin().DistTo(entPos);
+				break;
 			}
-			else if (Settings::Aimbot::aimbotSelection == 1) // Health
-			{
-				distance = entity->GetHealth();
-				if (distance > finalDistance)
-					continue;
-			}
-			else if (Settings::Aimbot::aimbotSelection == 2) // FOV
-			{
-				const VMatrix viewMatrix = EngineClient->WorldToScreenMatrix();
-				Vector screenPos;
-				if (!WorldToScreen(entPos, screenPos))
-					continue;
-				screenPos.z = 0;
-				distance = Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0).DistTo(screenPos);
-				fovDistance = distance;
-				if (distance > finalDistance)
-					continue;
-			}
-			// do min damage sorting here with ray tracing
+
+			if (score > bestScore)
+				continue;
+
 			if (Settings::Aimbot::aimbotFovEnabled)
 			{
-				if (fovDistance == FLT_MAX)
-				{
-					const VMatrix viewMatrix = EngineClient->WorldToScreenMatrix();
-					Vector screenPos;
-					if (!WorldToScreen(entPos, screenPos))
-						continue;
-					screenPos.z = 0;
-					fovDistance = Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0).DistTo(screenPos);
-				}
+				if (fovDistance == FLT_MAX && !GetFovDistance(entPos, fovDistance))
+					continue;
+
 				if (fovDistance > Settings::Aimbot::aimbotFOV)
 					continue;
 			}
 
-			finalPos = entPos;
-			finalDistance = distance;
-			Settings::Aimbot::finalTarget = entity;
+			bestScore = score;
+			best = entity;
+		}
+
+		return best;
+	}
+} // namespace LegitAim
+
+void DoLegitAimbot(CUserCmd* cmd)
+{
+	static C_BasePlayer* lastTarget = nullptr;
+	static bool autoFireToggle = false;
+
+	// Everything keyed to a particular target/session, cleared together: the
+	// auto-fire toggle must not survive a new target, a disabled aimbot or a
+	// reconnect.
+	const auto reset = []()
+	{
+		Settings::Aimbot::finalTarget = nullptr;
+		lastTarget = nullptr;
+		autoFireToggle = false;
+	};
+
+	if (!cmd || !LegitAim::HasValidInterfaces())
+	{
+		reset();
+		return;
+	}
+
+	bool keyDown = false;
+	getKeyState(Settings::Aimbot::aimbotKey, Settings::Aimbot::aimbotKeyStyle, &keyDown, henlo1, henlo2, henlo3);
+
+	if (!keyDown || !Settings::Aimbot::enableAimbot)
+	{
+		reset();
+		return;
+	}
+
+	const Vector eyePos = localPlayer->EyePosition();
+
+	// A raw C_BasePlayer* stays non-null after the entity behind it is gone, so
+	// the locked target is re-validated every tick rather than trusted from the
+	// previous one.  "No target" is nullptr: upstream parked localPlayer in
+	// finalTarget as a sentinel, which every consumer then had to know about.
+	if (Settings::Aimbot::finalTarget && !LegitAim::IsTargetable(Settings::Aimbot::finalTarget))
+		Settings::Aimbot::finalTarget = nullptr;
+
+	const bool keepLockedTarget = Settings::Aimbot::lockOnTarget && Settings::Aimbot::finalTarget != nullptr;
+
+	if (!keepLockedTarget)
+		Settings::Aimbot::finalTarget = LegitAim::SelectTarget(eyePos);
+
+	C_BasePlayer* target = Settings::Aimbot::finalTarget;
+	if (!target)
+	{
+		reset();
+		return;
+	}
+
+	// Recomputed every tick.  On the locked path upstream never wrote finalPos
+	// at all -- `Vector finalPos;` went straight into AngleTo() uninitialised --
+	// and on the other path it held a position captured during selection, which
+	// is stale the moment the target moves.
+	Vector finalPos;
+	if (!LegitAim::GetAimPosition(target, finalPos))
+	{
+		reset();
+		return;
+	}
+
+	// AngleTo() builds its delta as (*this - vOther), so finalPos.AngleTo(eyePos)
+	// is the eye -> target direction.  Sanitize() clamps the pitch and wraps the
+	// yaw: AngleTo() returns (0,0,0) for a degenerate delta, and the engine must
+	// never be handed an out-of-domain angle.
+	const QAngle desired = AngleMath::Sanitize(finalPos.AngleTo(eyePos));
+	QAngle calc = desired;
+
+	if (lastTarget != target)
+		autoFireToggle = false;
+
+	const bool canHit = CanHit(target, eyePos, finalPos);
+
+	// Smoothing only applies to the angles the player actually sees; with silent
+	// aim the view never moves, so there is nothing to smooth.
+	if (Settings::Aimbot::smoothing && !Settings::Aimbot::silentAim)
+	{
+		// SmoothingFactor() guards 1.f / smoothSteps against zero, negatives and
+		// NaN: the slider is bounded to 10-50, a hand-edited config is not.
+		// SmoothTowards() takes the *shortest* way round on each axis, so
+		// +179 -> -179 is a 2 degree turn and not a 358 degree one backwards.
+		calc = AngleMath::SmoothTowards(cmd->viewangles, desired,
+			AngleMath::SmoothingFactor(Settings::Aimbot::smoothSteps));
+	}
+
+	const bool aimIsOnTarget = AngleMath::RemainingError(calc, desired) <= LegitAim::kAimReadyDegrees;
+
+	if (!Settings::Aimbot::silentAim)
+		EngineClient->SetViewAngles(calc);
+
+	if (Settings::Aimbot::aimbotAutoFire && aimIsOnTarget && canHit)
+	{
+		// Alternating so a semi-automatic weapon re-triggers between ticks.
+		autoFireToggle = !autoFireToggle;
+
+		if (autoFireToggle)
+		{
+			cmd->buttons |= IN_ATTACK;
+		}
+		else if (Settings::Aimbot::pistolFastShoot)
+		{
+			cmd->buttons &= ~IN_ATTACK;
 		}
 	}
 
-	if (Settings::Aimbot::finalTarget && Settings::Aimbot::finalTarget->IsAlive())
+	if (cmd->buttons & IN_ATTACK)
 	{
-		QAngle calc = finalPos.AngleTo(eyePos);
-		canHit = CanHit(Settings::Aimbot::finalTarget, eyePos, finalPos);
+		cmd->viewangles = calc;
 
-		bool shouldFire = true;
-		if (lastTarget != Settings::Aimbot::finalTarget)
-			smoothSteps = 0;
-		
+		// bSendpacket is resolved by a signature scan at start-up and is null if
+		// that scan failed.
+		if (Settings::Aimbot::silentAim && Globals::bSendpacket)
+			*Globals::bSendpacket = false;
+	}
 
-		if (Settings::Aimbot::smoothing && !Settings::Aimbot::silentAim)
-		{
-			smoothSteps++;
-
-			if (smoothSteps >= Settings::Aimbot::smoothSteps)
-				shouldFire = true;
-			else {
-				shouldFire = false;
-			}
-			auto delta = calc - cmd->viewangles;
-			auto smoothed = cmd->viewangles + (delta * (1.f / Settings::Aimbot::smoothSteps));
-
-			calc = smoothed;
-		}
-
-		// it is better to use smoothing without silent aim.
-		if (!Settings::Aimbot::silentAim)
-		{
-				EngineClient->SetViewAngles(calc);
-		}
-
-		if (Settings::Aimbot::aimbotAutoFire && shouldFire)
-		{
-			if (canHit)
-			{
-				static bool toggle = false;
-				toggle = !toggle;
-				if (toggle)
-				{
-					cmd->buttons |= IN_ATTACK;
-				}
-				else if (Settings::Aimbot::pistolFastShoot)cmd->buttons &= ~IN_ATTACK;
-			}
-		}
-
-		if (cmd->buttons & IN_ATTACK)
-		{
-			cmd->viewangles = calc;
-			if(Settings::Aimbot::silentAim)
-				*Globals::bSendpacket = false;
-		}
-
-	} else smoothSteps = 0;
-	lastTarget = Settings::Aimbot::finalTarget;
-
+	lastTarget = target;
 }
