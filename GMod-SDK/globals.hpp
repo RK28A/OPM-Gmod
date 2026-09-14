@@ -38,6 +38,7 @@
 #include "client/IGameMovement.h"
 #include "hacks/ConVarSpoofing.h"
 
+#include <cmath>
 #include <math.h>
 
 
@@ -115,12 +116,17 @@ char* present; // clean that
 _Present oPresent;
 MsgFn ConColorMsg;
 
-const void ConPrint(const char* text, Color col)
+// `text` reaches ConColorMsg as an *argument*, never as the format string.
+// It carries Lua error messages and other server-controlled data (see
+// PaintTraverse.h), so "%s %n" in it used to be interpreted as a format.
+void ConPrint(const char* text, Color col)
 {
-	Color color(153,204,255);
-	ConColorMsg(color, "[GMOD-SDK] ");
-	ConColorMsg(col, text);
-	ConColorMsg(col, "\n");
+	if (!ConColorMsg)
+		return;
+
+	Color color(153, 204, 255);
+	ConColorMsg(color, "%s", "[GMOD-SDK] ");
+	ConColorMsg(col, "%s\n", text ? text : "(null)");
 }
 
 
@@ -167,9 +173,6 @@ namespace Globals {
 	int executeState = 0;
 
 	int screenWidth, screenHeight;
-
-	void* damageEvent;
-	void* deathEvent;
 
 	bool* bSendpacket;
 	unsigned int* predictionRandomSeed;
@@ -239,13 +242,37 @@ namespace Settings {
 	namespace Visuals {
 		float fov = 130.f;
 		bool fovEnabled = false;
-		float viewModelFOV = 90.f;
+
+		// The value the user configured.  Kept separate from the engine's own
+		// view model FOV below: upstream used viewModelFOV == -1.f as both the
+		// "not captured yet" sentinel and the setting, so once the default
+		// became 90.f the capture never ran again.
+		float viewModelFov = 90.f;
 		bool viewModelFovEnabled = false;
-		bool noVisualRecoil;
+
+		// The engine's native view model FOV, captured on the first RenderView
+		// and restored when the option is switched off.
+		float originalViewModelFov = 0.f;
+		bool hasOriginalViewModelFov = false;
+
+		// Shared by the slider, the config loader and the RenderView hook, so a
+		// value coming from a file is bounded the same way the UI bounds it.
+		inline constexpr float kMinFov = 30.f;
+		inline constexpr float kMaxFov = 150.f;
+
+		[[nodiscard]] inline float ClampFov(float fov) noexcept
+		{
+			if (!std::isfinite(fov))
+				return kMaxFov;
+
+			return (fov < kMinFov) ? kMinFov : ((fov > kMaxFov) ? kMaxFov : fov);
+		}
+
+		bool noVisualRecoil = false;
 		Color worldColor(17.f, 33.f, 71.f, 255.f);
-		bool changeWorldColor;
-		bool fullBright;
-		bool disableSkyBox;
+		bool changeWorldColor = false;
+		bool fullBright = false;
+		bool disableSkyBox = false;
 
 	}
 	namespace AntiAim {
@@ -257,30 +284,45 @@ namespace Settings {
 		float fakePitch;
 	}
 	namespace Aimbot {
-		float aimbotFOV;
-		bool silentAim;
-		bool lockOnTarget;
+		float aimbotFOV = 5.f;
+		bool silentAim = false;
+		bool lockOnTarget = false;
 		ButtonCode_t aimbotKey = KEY_NONE;
 		int aimbotKeyStyle = 1;
-		bool enableAimbot;
-		int aimbotHitbox;
-		bool aimbotAutoWall;
-		bool aimbotAutoFire;
-		float aimbotMinDmg;
-		bool aimbotFovEnabled;
-		bool drawAimbotFov;
-		int aimbotSelection;
-		bool drawAimbotHeadlines;
-		bool aimAtTeammates;
+		bool enableAimbot = false;
+		int aimbotHitbox = 0;
+		bool aimbotAutoWall = false;
+		bool aimbotAutoFire = false;
+		float aimbotMinDmg = 1.f;
+		bool aimbotFovEnabled = false;
+		bool drawAimbotFov = false;
+
+		// Domains for the values the config loader has to bound.  They live
+		// here rather than next to the tables they index so ConfigSystem.h can
+		// validate without depending on Misc.h / Utils.h include order.
+		inline constexpr int kHitboxCount = 3;    // see IntToBoneName()
+		inline constexpr int kSelectionCount = 3; // distance / health / fov
+
+		int aimbotSelection = 0;
+		bool drawAimbotHeadlines = false;
+		bool aimAtTeammates = false;
+
+		// nullptr means "no target".  Never localPlayer -- that sentinel forced
+		// every consumer to know about it (see LegitAim.h).
 		C_BasePlayer* finalTarget = nullptr;
 
-		bool aimAtFriends;
-		bool onlyAimAtFriends;
+		bool aimAtFriends = false;
+		bool onlyAimAtFriends = false;
 
-		bool pistolFastShoot;
+		bool pistolFastShoot = false;
 
-		bool smoothing;
-		float smoothSteps;
+		bool smoothing = false;
+
+		// Divisor of the *remaining* angular error consumed per tick, so a
+		// larger value is slower.  It is not a count of ticks to completion:
+		// the approach is exponential and only tends towards the target.
+		// AngleMath::SmoothingFactor() is what turns it into a usable fraction.
+		float smoothSteps = 10.f;
 
 		Color fovColor(255, 255, 255);
 
@@ -331,8 +373,13 @@ namespace Settings {
 		int freeCamKeyStyle = 1;
 		float freeCamSpeed;
 
-		bool hitmarkerSoundEnabled;
-		int hitmarkerSound;
+		bool hitmarkerSoundEnabled = false;
+
+		inline constexpr int kHitmarkerSoundCount = 2; // see hitMarkers[] in Misc.h
+		int hitmarkerSound = 0;
+
+		// Raise a toast for each hit the local player lands.
+		bool damageNotifications = false;
 		bool hitmarker;
 		float hitmarkerSize = 10.f;
 
@@ -368,30 +415,20 @@ void rainbowColor(Color& col, float speed) noexcept
 	col.fCol[2] = std::sin(speed * GlobalVars->realtime + 4 * PI / 3) * 0.5f + 0.5f;
 }
 // Make sure to add everything to ConfigSystem.h too! both ResetConfig, LoadConfig, and SaveConfig!!
-template<typename ... Args>
-std::string string_format(const std::string& format, Args ... args)
-{
-	int size_s = std::snprintf(nullptr, 0, format.c_str(), args ...) + 1; // Extra space for '\0'
-	if (size_s <= 0) { throw std::runtime_error("Error during formatting."); }
-	auto size = static_cast<size_t>(size_s);
-	std::unique_ptr<char[]> buf(new char[size]);
-	std::snprintf(buf.get(), size, format.c_str(), args ...);
-	return std::string(buf.get(), buf.get() + size - 1); // We don't want the '\0' inside
-}
 std::wstring s2ws(const std::string& str)
 {
 	if (str.empty()) return std::wstring();
-	int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+	int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], static_cast<int>(str.size()), nullptr, 0);
 	std::wstring wstrTo(size_needed, 0);
-	MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+	MultiByteToWideChar(CP_UTF8, 0, &str[0], static_cast<int>(str.size()), &wstrTo[0], size_needed);
 	return wstrTo;
 }
 
 std::string ws2s(const std::wstring& wstr)
 {
 	if (wstr.empty()) return std::string();
-	int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+	int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
 	std::string strTo(size_needed, 0);
-	WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+	WideCharToMultiByte(CP_UTF8, 0, &wstr[0], static_cast<int>(wstr.size()), &strTo[0], size_needed, nullptr, nullptr);
 	return strTo;
 }

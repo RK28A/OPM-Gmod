@@ -1,5 +1,8 @@
 #pragma once
 #include "../../ImGui/imgui.h"
+// PushItemFlag / ImGuiItemFlags_Disabled live in the internal header in this
+// ImGui version; there is no public BeginDisabled() yet.
+#include "../../ImGui/imgui_internal.h"
 
 void ColorPicker(const char* name, Color* color, bool alpha) {
 	
@@ -11,6 +14,31 @@ void ColorPicker(const char* name, Color* color, bool alpha) {
 
 
 namespace Menu {
+	// Grey out and lock the controls a setting does not apply to, so the menu
+	// says which options actually have an effect.
+	void BeginDisabledIf(bool disabled) {
+		if (!disabled)
+			return;
+
+		ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+	}
+
+	void EndDisabledIf(bool disabled) {
+		if (!disabled)
+			return;
+
+		ImGui::PopItemFlag();
+		ImGui::PopStyleVar();
+	}
+
+	// Attach to the control just submitted.  "%s" and not `text` as the format:
+	// SetTooltip is varargs.
+	void InsertTooltip(const char* text) {
+		if (text && ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", text);
+	}
+
 	const void InsertSpacer(const char* label) {
 		ImGui::BeginChild(label, ImVec2(210.f, 18.f), false);  ImGui::EndChild();
 	}
