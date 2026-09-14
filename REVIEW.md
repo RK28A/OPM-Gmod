@@ -141,6 +141,33 @@ id stability, concurrent insert/collect; yaw wrapping, `+179 -> -179`,
   cast passes.** Applied to the code this review touched, not retrofitted
   across the whole SDK.
 
+## Follow-up crash fixes
+
+A second pass for null-dereference crashes of the same class as the aim-path
+fixes — pointers that come from a signature scan or an engine call and were used
+without a check. These prevent the injected module from crashing its host; they
+change nothing when the pointers are valid.
+
+- `CreateMove.h` — `Globals::bSendpacket` (from a signature scan, null if it
+  failed) was written and read on several paths unchecked; the end-of-frame
+  bone backup also ran `localPlayer->GetClientRenderable()->SetupBones(...)`
+  outside the `localPlayer` guard, so both `localPlayer` and the renderable
+  could be null.
+- `PaintTraverse.h` — `LuaShared->GetLuaInterface()` can return null; the Lua
+  executor path dereferenced it immediately.
+- `GunHacks.h` — `Input->GetUserCmd()` returns null for a slot with no backing
+  command; the recoil-reversal code (fas2 and cw bases) dereferenced the result
+  straight away. Also un-shadowed the inner `cmd` in the cw loop.
+
+## Out of scope: anti-cheat evasion
+
+A request to make the detectable modules "more discreet" so they survive an
+anti-cheat was **declined**. Making a game cheat evade anti-cheat detection is
+detection evasion whose purpose is undetected cheating in online play; it is not
+part of this code-safety review, and the original review deliberately excluded
+"améliorations destinées à contourner une protection/anti-cheat" as well. The
+work here stays on C++ safety, correctness and stability.
+
 ## Verified here
 
 ```

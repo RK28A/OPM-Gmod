@@ -34,8 +34,9 @@ void __fastcall hkPaintTraverse(VPanelWrapper* _this,
 		auto l = Globals::waitingToBeExecuted.load();
 		if (l.first && l.second && oRunStringEx)
 		{
-			auto Lua = LuaShared->GetLuaInterface(Globals::executeState * 2);
-			if (!oRunStringEx(Lua, RandomString(16).c_str(), "", l.second, true, false, false, false)) {
+			auto Lua = LuaShared ? LuaShared->GetLuaInterface(Globals::executeState * 2) : nullptr;
+			// GetLuaInterface can return null; every use below dereferences it.
+			if (Lua && !oRunStringEx(Lua, RandomString(16).c_str(), "", l.second, true, false, false, false)) {
 				const char* error = Lua->GetString(-1);
 				static Color red(255, 0, 0);
 				ConPrint(error, red);
