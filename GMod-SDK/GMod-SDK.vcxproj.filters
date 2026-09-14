@@ -131,6 +131,9 @@
     <ClInclude Include="CPhysicsSurfaceProps.h">
       <Filter>Header Files\vphysics</Filter>
     </ClInclude>
+    <ClInclude Include="hacks\AdminEsp.h">
+      <Filter>Header Files\hacks</Filter>
+    </ClInclude>
     <ClInclude Include="hacks\AntiAim.h">
       <Filter>Header Files\hacks</Filter>
     </ClInclude>

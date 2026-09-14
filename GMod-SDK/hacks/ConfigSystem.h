@@ -185,6 +185,11 @@ namespace ConfigSystem
 			HandleConfigItem(j["ESP"]["entEsp"], handle, &Settings::ESP::entEsp, false);
 			HandleConfigItem(j["ESP"]["onlyFriends"], handle, &Settings::ESP::onlyFriends, false);
 
+			HandleConfigItem(j["ESP"]["adminEsp"], handle, &Settings::ESP::adminEsp, false);
+			HandleConfigItem(j["ESP"]["adminEspName"], handle, &Settings::ESP::adminEspName, true);
+			HandleConfigItem(j["ESP"]["adminEspBox"], handle, &Settings::ESP::adminEspBox, true);
+			HandleConfigC(j["ESP"]["adminEspColor"], handle, Settings::ESP::adminEspColor, Color(255, 140, 0));
+
 			HandleConfigItem(j["Visuals"]["fovEnabled"], handle, &Settings::Visuals::fovEnabled, false);
 			HandleConfigItem(j["Visuals"]["fov"], handle, &Settings::Visuals::fov, 130.f);
 			// JSON key kept as-is so existing config files still load; only the

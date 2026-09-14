@@ -238,6 +238,16 @@ namespace Settings {
 
 		bool onlyFriends = false;
 
+		// --- Admin ESP -----------------------------------------------------
+		// A separate module (AdminEsp.h), not part of the player ESP above:
+		// highlights server staff (Player:IsAdmin() via Lua) with their name
+		// and a box, drawn through walls like the rest of the ESP.  Its own
+		// toggles and its own colour so nothing here touches the classic path.
+		bool adminEsp = false;
+		bool adminEspName = true;
+		bool adminEspBox = true;
+		Color adminEspColor(255, 140, 0); // orange, distinct from the white ESP default
+
 	}
 	namespace Visuals {
 		float fov = 130.f;

@@ -9,6 +9,7 @@
 #include "../hacks/menu/GUI.h"
 #include "../hacks/menu/drawing.h"
 #include "../hacks/ESP.h"
+#include "../hacks/AdminEsp.h"
 #include "../hacks/menu/MenuControls.h"
 #include "../hacks/menu/MenuBackground.h"
 #include "../hacks/menu/Fonts.h"
@@ -211,6 +212,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 	}
 
 	doEsp();
+	doAdminEsp(); // separate admin overlay; no-op unless Settings::ESP::adminEsp
 #ifdef _DEBUG
 		if (EngineClient->IsInGame())
 		{
