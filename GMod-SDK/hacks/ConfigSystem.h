@@ -97,6 +97,44 @@ namespace ConfigSystem
 		}
 	}
 
+	// A config file is external input: the sliders bound these values in the
+	// UI, nothing bounds them on the way in from disk.  Anything that ends up
+	// indexing an array or dividing must be checked here.
+	void ValidateSettings()
+	{
+		Settings::Visuals::fov = Settings::Visuals::ClampFov(Settings::Visuals::fov);
+		Settings::Visuals::viewModelFov = Settings::Visuals::ClampFov(Settings::Visuals::viewModelFov);
+		Settings::Misc::zoomFOV = Settings::Visuals::ClampFov(Settings::Misc::zoomFOV);
+
+		// AngleMath::SmoothingFactor() divides by this every tick.
+		if (!std::isfinite(Settings::Aimbot::smoothSteps) || Settings::Aimbot::smoothSteps < 1.f)
+			Settings::Aimbot::smoothSteps = 1.f;
+		else if (Settings::Aimbot::smoothSteps > 50.f)
+			Settings::Aimbot::smoothSteps = 50.f;
+
+		if (!std::isfinite(Settings::Aimbot::aimbotFOV) || Settings::Aimbot::aimbotFOV < 0.f)
+			Settings::Aimbot::aimbotFOV = 5.f;
+
+		if (!std::isfinite(Settings::Aimbot::aimbotMinDmg) || Settings::Aimbot::aimbotMinDmg < 0.f)
+			Settings::Aimbot::aimbotMinDmg = 1.f;
+
+		// Array indexes.
+		if (Settings::Misc::hitmarkerSound < 0 || Settings::Misc::hitmarkerSound >= Settings::Misc::kHitmarkerSoundCount)
+			Settings::Misc::hitmarkerSound = 0;
+
+		if (Settings::Aimbot::aimbotHitbox < 0 || Settings::Aimbot::aimbotHitbox >= Settings::Aimbot::kHitboxCount)
+			Settings::Aimbot::aimbotHitbox = 0;
+
+		if (Settings::Aimbot::aimbotSelection < 0 || Settings::Aimbot::aimbotSelection >= Settings::Aimbot::kSelectionCount)
+			Settings::Aimbot::aimbotSelection = 0;
+
+		if (!std::isfinite(Settings::Misc::thirdpersonDistance) || Settings::Misc::thirdpersonDistance < 0.f)
+			Settings::Misc::thirdpersonDistance = 100.f;
+
+		if (!std::isfinite(Settings::Misc::freeCamSpeed) || Settings::Misc::freeCamSpeed < 0.f)
+			Settings::Misc::freeCamSpeed = 1.f;
+	}
+
 	void _HandleConfig(const char* configName, configHandle handle)
 	{
 		CreateDirectory(L"C:\\GMOD-SDK-Settings", NULL);
@@ -148,8 +186,11 @@ namespace ConfigSystem
 			HandleConfigItem(j["ESP"]["onlyFriends"], handle, &Settings::ESP::onlyFriends, false);
 
 			HandleConfigItem(j["Visuals"]["fovEnabled"], handle, &Settings::Visuals::fovEnabled, false);
-			HandleConfigItem(j["Visuals"]["fov"], handle, &Settings::Visuals::fov, -1.f);
-			HandleConfigItem(j["Visuals"]["viewModelFOV"], handle, &Settings::Visuals::viewModelFOV, -1.f);
+			HandleConfigItem(j["Visuals"]["fov"], handle, &Settings::Visuals::fov, 130.f);
+			// JSON key kept as-is so existing config files still load; only the
+			// C++ identifier was renamed for consistency with the enable flag.
+			HandleConfigItem(j["Visuals"]["viewModelFovEnabled"], handle, &Settings::Visuals::viewModelFovEnabled, false);
+			HandleConfigItem(j["Visuals"]["viewModelFOV"], handle, &Settings::Visuals::viewModelFov, 90.f);
 			HandleConfigItem(j["Visuals"]["noVisualRecoil"], handle, &Settings::Visuals::noVisualRecoil, false);
 			HandleConfigC(j["Visuals"]["worldColor"], handle, Settings::Visuals::worldColor, Color(255, 255, 255));
 			HandleConfigItem(j["Visuals"]["changeWorldColor"], handle, &Settings::Visuals::changeWorldColor, false);
@@ -182,7 +223,9 @@ namespace ConfigSystem
 			HandleConfigItem(j["Aimbot"]["onlyAimAtFriends"], handle, &Settings::Aimbot::onlyAimAtFriends, false);
 			HandleConfigItem(j["Aimbot"]["pistolFastShoot"], handle, &Settings::Aimbot::pistolFastShoot, false);
 			HandleConfigItem(j["Aimbot"]["smoothing"], handle, &Settings::Aimbot::smoothing, false);
-			HandleConfigItem(j["Aimbot"]["smoothSteps"], handle, &Settings::Aimbot::smoothSteps, 1.f);
+			// Default raised from 1.f: smoothSteps is now the divisor of the
+			// remaining error per tick, and 1 means "no smoothing at all".
+			HandleConfigItem(j["Aimbot"]["smoothSteps"], handle, &Settings::Aimbot::smoothSteps, 10.f);
 			HandleConfigC(j["Aimbot"]["fovColor"], handle, Settings::Aimbot::fovColor, Color(255, 255, 255));
 
 			HandleConfigItem(j["Misc"]["drawSpectators"], handle, &Settings::Misc::drawSpectators, false);
@@ -215,7 +258,8 @@ namespace ConfigSystem
 			HandleConfigItem(j["Misc"]["freeCamKeyStyle"], handle, &Settings::Misc::freeCamKeyStyle, 1);
 			HandleConfigItem(j["Misc"]["freeCamSpeed"], handle, &Settings::Misc::freeCamSpeed, 1.f);
 			HandleConfigItem(j["Misc"]["hitmarkerSoundEnabled"], handle, &Settings::Misc::hitmarkerSoundEnabled, false);
-			HandleConfigItem(j["Misc"]["hitmarkerSound"], handle, &Settings::Misc::hitmarkerSound, NULL);
+			HandleConfigItem(j["Misc"]["hitmarkerSound"], handle, &Settings::Misc::hitmarkerSound, 0);
+			HandleConfigItem(j["Misc"]["damageNotifications"], handle, &Settings::Misc::damageNotifications, false);
 			HandleConfigItem(j["Misc"]["hitmarker"], handle, &Settings::Misc::hitmarker, false);
 			HandleConfigItem(j["Misc"]["hitmarkerSize"], handle, &Settings::Misc::hitmarkerSize, 10.f);
 			HandleConfigItem(j["Misc"]["fakeLag"], handle, &Settings::Misc::fakeLag, false);
@@ -243,6 +287,11 @@ namespace ConfigSystem
 			_HandleConfig(configName, configHandle::Save);
 			return _HandleConfig(configName, configHandle::Load);
 		}
+		// Applies to Load and Reset alike: both can leave a setting outside the
+		// domain the rest of the code assumes.
+		if (handle != configHandle::Save)
+			ValidateSettings();
+
 		if (handle == configHandle::Save)
 		{
 			std::ofstream o(std::string("C:\\GMOD-SDK-Settings\\") + configName);

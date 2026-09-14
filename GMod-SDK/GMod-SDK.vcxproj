@@ -99,6 +99,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <TreatSpecificWarningsAsErrors>4172;4700;4703;4715;4716</TreatSpecificWarningsAsErrors>
+      <AdditionalOptions>/w44715 /w44018 /w44389 /w44456 /w44457 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -117,6 +119,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <TreatSpecificWarningsAsErrors>4172;4700;4703;4715;4716</TreatSpecificWarningsAsErrors>
+      <AdditionalOptions>/w44715 /w44018 /w44389 /w44456 /w44457 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -135,6 +139,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <TreatSpecificWarningsAsErrors>4172;4700;4703;4715;4716</TreatSpecificWarningsAsErrors>
+      <AdditionalOptions>/w44715 /w44018 /w44389 /w44456 /w44457 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -153,6 +159,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <TreatSpecificWarningsAsErrors>4172;4700;4703;4715;4716</TreatSpecificWarningsAsErrors>
+      <AdditionalOptions>/w44715 /w44018 /w44389 /w44456 /w44457 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -241,9 +249,11 @@
     <ClInclude Include="ImGui\imgui-notify\fa_solid_900.h" />
     <ClInclude Include="ImGui\imgui-notify\font_awesome_5.h" />
     <ClInclude Include="ImGui\imgui-notify\imgui_notify.h" />
+    <ClInclude Include="ImGui\imgui-notify\notify_core.h" />
     <ClInclude Include="lua_shared\CLuaConVars.h" />
     <ClInclude Include="lua_shared\CLuaInterface.h" />
     <ClInclude Include="lua_shared\CLuaShared.h" />
+    <ClInclude Include="mathlib\AngleMath.h" />
     <ClInclude Include="mathlib\mathlib.h" />
     <ClInclude Include="mathlib\math_pfns.h" />
     <ClInclude Include="NetVars.h" />

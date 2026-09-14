@@ -92,10 +92,11 @@ void Main()
 
     present = GetRealFromRelative((char*)findPattern(PresentModule, PresentPattern, "Present"), 0x2, 6, false);
 
-    Globals::damageEvent = new DamageEvent();
-    Globals::deathEvent = new DeathEvent();
-    GameEventManager->AddListener((IGameEventListener2*)Globals::damageEvent, "player_hurt", false);
-    GameEventManager->AddListener((IGameEventListener2*)Globals::deathEvent, "entity_killed", false);
+    // Owns the listeners, registers them once, and reports a failure instead of
+    // assuming AddListener() worked.  They used to be raw `new` results parked
+    // in two void* globals, with nothing to unregister them on unload.
+    if (!GameEvents::Register())
+        ConPrint("Game event listeners are not fully registered", Color(255, 200, 0));
 
     GUI::categories.emplace_back(GUI::GUICategory{ &GUI::DrawAimbot, "A", true, true, true });
     GUI::categories.emplace_back(GUI::GUICategory{ &GUI::DrawVisuals, "C", false, true, true });
@@ -133,7 +134,18 @@ void Main()
 BOOL APIENTRY DllMain(HMODULE hModule, uintptr_t ul_reason_for_call, LPVOID lpReserved)
 {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH)
+    {
         std::thread(Main).detach();
+    }
+    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+    {
+        // The engine holds the raw listener pointers; if the module goes away
+        // without taking them back, the next game event calls into unmapped
+        // memory.  This runs under the loader lock, so it does nothing but
+        // remove the pointers and free the objects -- no threads, no I/O.
+        GameEvents::Unregister();
+    }
+
     return TRUE;
 }
 
