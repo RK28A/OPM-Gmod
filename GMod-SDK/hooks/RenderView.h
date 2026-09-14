@@ -17,17 +17,50 @@ CViewSetup& view, int nClearFlags, int whatToDraw)
 	bool zoomKeyDown = false;
 	getKeyState(Settings::Misc::zoomKey, Settings::Misc::zoomKeyStyle, &zoomKeyDown, henlo69, henlo70, henlo71);
 
-	// make this run only if not holding right click for instance to restore fov to what it should be while aiming
-	if(Settings::Visuals::fovEnabled)
-	if (zoomKeyDown && Settings::Misc::zoom)
-		view.fov = Settings::Misc::zoomFOV;
-	else view.fov = Settings::Visuals::fov;
+	// Braced, but the behaviour is unchanged: the else belongs to the inner if,
+	// so the world FOV is only touched while the option is on.
+	if (Settings::Visuals::fovEnabled)
+	{
+		if (zoomKeyDown && Settings::Misc::zoom)
+		{
+			view.fov = Settings::Visuals::ClampFov(Settings::Misc::zoomFOV);
+		}
+		else
+		{
+			view.fov = Settings::Visuals::ClampFov(Settings::Visuals::fov);
+		}
+	}
 
 	//view.angles = Globals::lastCmd.viewangles;
-	if(Settings::Visuals::viewModelFOV == -1.f)
-		Settings::Visuals::viewModelFOV = view.fovViewmodel;
+
+	// Capture the engine's own view model FOV once, on the first frame that
+	// reports a usable one.
+	//
+	// Upstream used `viewModelFOV == -1.f` as both the "not captured yet"
+	// sentinel and the user's setting.  Once the PR gave the setting a default
+	// of 90.f the sentinel could never match, so the native value was never
+	// recorded and there was nothing to restore.  The two roles are now two
+	// variables.  (The capture happens once per injection: a mid-session change
+	// to the engine's own viewmodel_fov cvar is not picked up.)
+	if (!Settings::Visuals::hasOriginalViewModelFov && view.fovViewmodel > 0.f)
+	{
+		Settings::Visuals::originalViewModelFov = view.fovViewmodel;
+		Settings::Visuals::hasOriginalViewModelFov = true;
+	}
+
 	if (Settings::Visuals::viewModelFovEnabled)
-		view.fovViewmodel = Settings::Visuals::viewModelFOV;
+	{
+		// Clamped here too: the slider bounds the value, a hand-edited config
+		// does not.
+		view.fovViewmodel = Settings::Visuals::ClampFov(Settings::Visuals::viewModelFov);
+	}
+	else if (Settings::Visuals::hasOriginalViewModelFov)
+	{
+		// The engine does not necessarily rewrite fovViewmodel every frame, so
+		// switching the option off has to put the captured value back.
+		view.fovViewmodel = Settings::Visuals::originalViewModelFov;
+	}
+
 	
 	static Vector camPos = Vector(0,0,0);
 

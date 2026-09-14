@@ -12,6 +12,7 @@
 #include "../../globals.hpp"
 #include "MenuControls.h"
 #include "../../hacks/ConfigSystem.h"
+#include "../../hacks/Misc.h"
 #include "../../hacks/Executor.h"
 #include "../../hooks/RunStringEx.h"
 #include "../../hooks/ProcessGMODServerToClient.h"
@@ -98,11 +99,15 @@ namespace GUI
 		"Config4",
 		"Config5",
 	};
+	// One entry per sound in hitMarkers[] (Misc.h), in the same order.  There
+	// used to be a third label here with no sound behind it, so picking it made
+	// the hitmarker read one past the end of that array.
 	const char* hitmarkerSound[]{
 		"Metal",
-		"Skeet",
 		"Bell",
 	};
+	static_assert(IM_ARRAYSIZE(hitmarkerSound) == Settings::Misc::kHitmarkerSoundCount,
+		"hitmarkerSound labels are out of sync with hitMarkers[] in Misc.h");
 	const char* autostrafeStyle[]{
 		"Normal",
 		"Silent strafe",
@@ -204,11 +209,24 @@ namespace GUI
 				Menu::InsertSlider("Crosshair Size", &Settings::Misc::crosshairSize, 1, 20);
 				Menu::InsertCheckbox("Spectators", &Settings::Misc::drawSpectators);
 
-				Menu::InsertCheckbox("Enabled FOV", &Settings::Visuals::fovEnabled);
-				Menu::InsertSlider("FOV", &Settings::Visuals::fov, 30, 150);
+				Menu::InsertCheckbox("Enable FOV", &Settings::Visuals::fovEnabled);
+				Menu::BeginDisabledIf(!Settings::Visuals::fovEnabled);
+				{
+					Menu::InsertSlider("FOV", &Settings::Visuals::fov,
+						Settings::Visuals::kMinFov, Settings::Visuals::kMaxFov);
+					Menu::InsertTooltip("World field of view in degrees. The engine default is 90.");
+				}
+				Menu::EndDisabledIf(!Settings::Visuals::fovEnabled);
 
-				Menu::InsertCheckbox("Enabled ViewModel FOV", &Settings::Visuals::viewModelFovEnabled);
-				Menu::InsertSlider("ViewModel FOV", &Settings::Visuals::viewModelFOV, 30, 150);
+				Menu::InsertCheckbox("Enable ViewModel FOV", &Settings::Visuals::viewModelFovEnabled);
+				Menu::InsertTooltip("Turning this off restores the FOV the engine was using.");
+				Menu::BeginDisabledIf(!Settings::Visuals::viewModelFovEnabled);
+				{
+					Menu::InsertSlider("ViewModel FOV", &Settings::Visuals::viewModelFov,
+						Settings::Visuals::kMinFov, Settings::Visuals::kMaxFov);
+					Menu::InsertTooltip("Field of view applied to the weapon model only.");
+				}
+				Menu::EndDisabledIf(!Settings::Visuals::viewModelFovEnabled);
 
 				Menu::InsertCheckbox("Zoom", &Settings::Misc::zoom);
 				ImGui::Keybind("zoomkey", (int*)&Settings::Misc::zoomKey, &Settings::Misc::zoomKeyStyle);
@@ -268,10 +286,38 @@ namespace GUI
 				Menu::InsertCombo("Hitbox", &Settings::Aimbot::aimbotHitbox, aimbotHitboxText, IM_ARRAYSIZE(aimbotHitboxText));
 
 				Menu::InsertCheckbox("Auto fire", &Settings::Aimbot::aimbotAutoFire);
-				Menu::InsertCheckbox("Auto wall", &Settings::Aimbot::aimbotAutoWall);
+				// Renamed: CanHit() is a line-of-sight trace, there is no wall
+				// penetration behind it, so what this option really does is
+				// refuse targets the shot cannot reach.
+				Menu::InsertCheckbox("Require line of sight", &Settings::Aimbot::aimbotAutoWall);
+				Menu::InsertTooltip("Only aim at targets with a clear shot. Wall penetration is not implemented.");
+
 				Menu::InsertCheckbox("Silent aim", &Settings::Aimbot::silentAim);
-				Menu::InsertCheckbox("Smoothing", &Settings::Aimbot::smoothing);
-				Menu::InsertSlider("Smoothing Steps", &Settings::Aimbot::smoothSteps, 10, 50);
+				Menu::InsertTooltip("Sends the aim angles without moving the view. Smoothing does not apply.");
+
+				// Smoothing is only applied when silent aim is off (see
+				// DoLegitAimbot), so grey the pair out when it cannot do
+				// anything.
+				const bool smoothingUnavailable = Settings::Aimbot::silentAim;
+				Menu::BeginDisabledIf(smoothingUnavailable);
+				{
+					Menu::InsertCheckbox("Smoothing", &Settings::Aimbot::smoothing);
+					Menu::InsertTooltip(smoothingUnavailable
+						? "Unavailable while silent aim is on: the view never moves."
+						: "Move the view towards the target progressively.");
+
+					Menu::BeginDisabledIf(!Settings::Aimbot::smoothing);
+					{
+						// Renamed from "Smoothing Steps": the approach is
+						// exponential, so this is how much of the remaining
+						// error is consumed per tick (1/N), not a number of
+						// ticks to completion.
+						Menu::InsertSlider("Smoothing Amount", &Settings::Aimbot::smoothSteps, 10, 50);
+						Menu::InsertTooltip("Fraction of the remaining angle covered each tick (1/N). 10 = fast, 50 = slow.");
+					}
+					Menu::EndDisabledIf(!Settings::Aimbot::smoothing);
+				}
+				Menu::EndDisabledIf(smoothingUnavailable);
 
 				Menu::InsertCheckbox("Aim lock", &Settings::Aimbot::lockOnTarget);
 				Menu::InsertCheckbox("Target teammates", &Settings::Aimbot::aimAtTeammates);
@@ -520,7 +566,14 @@ namespace GUI
 				Menu::InsertCheckbox("Hitmarker", &Settings::Misc::hitmarker);
 				Menu::InsertSlider("Hitmarker size", &Settings::Misc::hitmarkerSize, 3.f, 20.f);
 				Menu::InsertCheckbox("Hitmarker sound enabled", &Settings::Misc::hitmarkerSoundEnabled);
-				Menu::InsertCombo("Hitmarker sound", &Settings::Misc::hitmarkerSound, hitmarkerSound, IM_ARRAYSIZE(hitmarkerSound));
+				Menu::BeginDisabledIf(!Settings::Misc::hitmarkerSoundEnabled);
+				{
+					Menu::InsertCombo("Hitmarker sound", &Settings::Misc::hitmarkerSound, hitmarkerSound, IM_ARRAYSIZE(hitmarkerSound));
+				}
+				Menu::EndDisabledIf(!Settings::Misc::hitmarkerSoundEnabled);
+
+				Menu::InsertCheckbox("Damage notifications", &Settings::Misc::damageNotifications);
+				Menu::InsertTooltip("Show a notification for each hit you land.");
 
 				Menu::InsertCheckbox("Quick stop", &Settings::Misc::quickStop);
 
@@ -623,8 +676,10 @@ namespace GUI
 				{
 					SetWindowLongPtrA(Globals::window, GWLP_WNDPROC, (LONG_PTR)Globals::oWndProc);
 
-					GameEventManager->RemoveListener((IGameEventListener2*)Globals::damageEvent);
-					GameEventManager->RemoveListener((IGameEventListener2*)Globals::deathEvent);
+					// Unregisters and destroys both listeners.  The C casts were
+					// only needed because the listeners inherited privately;
+					// they are `public IGameEventListener2` now.
+					GameEvents::Unregister();
 
 					if (spoofedAllowCsLua)
 						spoofedAllowCsLua->~SpoofedConVar();
@@ -632,7 +687,8 @@ namespace GUI
 						spoofedCheats->~SpoofedConVar();
 
 					RestoreVMTHooks();
-					*Globals::bSendpacket = true;
+					if (Globals::bSendpacket)
+						*Globals::bSendpacket = true;
 					
 #ifdef _WIN64
 					* (char**)(present) = (char*)(oPresent);

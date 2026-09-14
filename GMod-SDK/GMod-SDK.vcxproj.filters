@@ -37,6 +37,9 @@
     <Filter Include="Header Files\hacks">
       <UniqueIdentifier>{c8ea507a-6d83-466a-b961-2fa37211acd6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\ImGui\imgui-notify">
+      <UniqueIdentifier>{b6c2e010-25f4-4acd-ae3e-9c771d7aea06}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\ImGui">
       <UniqueIdentifier>{93e599b6-7884-4ab8-a20e-7dd42e55044a}</UniqueIdentifier>
     </Filter>
@@ -366,13 +369,19 @@
       <Filter>Header Files\hooks</Filter>
     </ClInclude>
     <ClInclude Include="ImGui\imgui-notify\fa_solid_900.h">
-      <Filter>Header Files</Filter>
+      <Filter>Header Files\ImGui\imgui-notify</Filter>
     </ClInclude>
     <ClInclude Include="ImGui\imgui-notify\font_awesome_5.h">
-      <Filter>Header Files</Filter>
+      <Filter>Header Files\ImGui\imgui-notify</Filter>
     </ClInclude>
     <ClInclude Include="ImGui\imgui-notify\imgui_notify.h">
-      <Filter>Header Files</Filter>
+      <Filter>Header Files\ImGui\imgui-notify</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGui\imgui-notify\notify_core.h">
+      <Filter>Header Files\ImGui\imgui-notify</Filter>
+    </ClInclude>
+    <ClInclude Include="mathlib\AngleMath.h">
+      <Filter>Header Files\mathlib</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
