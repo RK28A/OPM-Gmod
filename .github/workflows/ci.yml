@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The module itself is MSVC/DirectX only, but notify_core.h and AngleMath.h
+  # are deliberately free of those dependencies, so their logic is compiled with
+  # warnings-as-errors, run, and then run again under ASan + UBSan.
+  unit-tests:
+    name: Unit tests (${{ matrix.cc.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc:
+          - { name: gcc, cxx: g++ }
+          - { name: clang, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run tests
+        working-directory: tests
+        run: make test CXX=${{ matrix.cc.cxx }} CXXFLAGS="-std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wformat=2 -Wnon-virtual-dtor -Wold-style-cast -Wunused -Werror"
+
+      - name: Run tests under AddressSanitizer and UndefinedBehaviorSanitizer
+        working-directory: tests
+        run: make asan CXX=${{ matrix.cc.cxx }}
+
+  clang-tidy:
+    name: clang-tidy (portable sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Analyse the portable headers through the test sources
+        working-directory: tests
+        run: |
+          clang-tidy notify_tests.cpp anglemath_tests.cpp main.cpp \
+            -- -std=c++17 -I.
+
+  # Real build of the module, matching what the README tells contributors to do
+  # in Visual Studio.
+  msbuild:
+    name: MSBuild ${{ matrix.configuration }} ${{ matrix.platform }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+        platform: [Win32, x64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - uses: nuget/setup-nuget@v2
+
+      # GMod-SDK.vcxproj expects the June 2010 DirectX SDK for D3DX9
+      # (D3DXCreateFont / D3DXCreateLine / D3DXCreateTextureFromFileInMemoryEx).
+      # Hosted runners do not ship it; this NuGet package is the supported way
+      # to get the same legacy headers and import libraries.
+      - name: Cache the D3DX9 package
+        id: dxsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: packages
+          key: dxsdk-d3dx-9.29.952.8
+
+      - name: Restore D3DX9
+        if: steps.dxsdk-cache.outputs.cache-hit != 'true'
+        run: nuget install Microsoft.DXSDK.D3DX -Version 9.29.952.8 -OutputDirectory packages -ExcludeVersion:false
+
+      - name: Build
+        run: >
+          msbuild GMod-SDK.sln
+          /m
+          /p:Configuration=${{ matrix.configuration }}
+          /p:Platform=${{ matrix.platform }}
+          /p:ForceImportBeforeCppTargets=${{ github.workspace }}\.github\ci\dxsdk.props
+          /p:DxsdkNugetDir=${{ github.workspace }}\packages\Microsoft.DXSDK.D3DX.9.29.952.8
+          /verbosity:minimal
+
+      - name: Upload the module
+        uses: actions/upload-artifact@v4
+        with:
+          name: GMod-SDK-${{ matrix.configuration }}-${{ matrix.platform }}
+          path: |
+            **/*.dll
+            **/*.pdb
+          if-no-files-found: error

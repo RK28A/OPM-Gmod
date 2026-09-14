@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Injected by CI through /p:ForceImportBeforeCppTargets so the checked-in
+  .vcxproj does not have to change.
+
+  GMod-SDK.vcxproj points IncludePath/LibraryPath at the June 2010 DirectX SDK
+  install (D3DXCreateFont, D3DXCreateLine, D3DXCreateTextureFromFileInMemoryEx),
+  which GitHub-hosted Windows runners do not have.  The Microsoft.DXSDK.D3DX
+  NuGet package ships exactly those legacy D3DX9 headers and import libraries,
+  so we prepend it to the search paths.
+
+  Release import libraries are used for every configuration: the package's debug
+  variant is named d3dx9d.lib, while drawing.h asks for d3dx9.lib by name via
+  #pragma comment(lib, ...).
+-->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <DxsdkNugetDir Condition="'$(DxsdkNugetDir)' == ''">$(SolutionDir)packages\Microsoft.DXSDK.D3DX.9.29.952.8</DxsdkNugetDir>
+    <DxsdkArch Condition="'$(Platform)' == 'Win32'">x86</DxsdkArch>
+    <DxsdkArch Condition="'$(Platform)' == 'x64'">x64</DxsdkArch>
+
+    <IncludePath>$(DxsdkNugetDir)\build\native\include;$(IncludePath)</IncludePath>
+    <LibraryPath>$(DxsdkNugetDir)\build\native\release\lib\$(DxsdkArch);$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+</Project>
