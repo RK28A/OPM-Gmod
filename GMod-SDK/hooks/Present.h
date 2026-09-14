@@ -80,18 +80,35 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 
 		style = &ImGui::GetStyle();
 		ImGuiIO& io = ImGui::GetIO();
-		ImFontConfig font_cfg;
-		font_cfg.FontDataOwnedByAtlas = false;
-
-		io.Fonts->AddFontFromMemoryTTF((void*)verdanaBytes, sizeof(verdanaBytes), 11.f, &font_cfg);
-		ImGui::MergeIconsWithLatestFont(11.f, false);
 		io.ConfigFlags = ImGuiConfigFlags_NoMouseCursorChange;
-		menuFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBytes, sizeof(verdanaBytes), 11);
-		boldMenuFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBoldBytes, sizeof(verdanaBoldBytes), 11);
-		massiveFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBoldBytes, sizeof(verdanaBoldBytes), 34);
-		tabFont = io.Fonts->AddFontFromMemoryTTF((void*)rawTabBytes, sizeof(rawTabBytes), 42);
+
+		// Every font below is a `const unsigned char[]` with static storage
+		// duration compiled into the module.  ImFontConfig defaults
+		// FontDataOwnedByAtlas to true, which makes ImFontAtlas::ClearInputData()
+		// call IM_FREE() on those arrays -- a free() of a pointer that never
+		// came from the allocator, on every atlas rebuild (a DX9 device reset,
+		// among others).  The bytes outlive the atlas, so the atlas must not own
+		// them.
+		ImFontConfig staticFontCfg;
+		staticFontCfg.FontDataOwnedByAtlas = false;
+
+		menuFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBytes, sizeof(verdanaBytes), 11.f, &staticFontCfg);
+
+		// Merged into menuFont, which is Fonts[0] and therefore ImGui's default
+		// font -- the one the notifications draw with.
+		//
+		// The PR added a second, unnamed copy of Verdana just to have something
+		// to merge into, and merged the icons into that instead of menuFont.
+		// Runs exactly once, inside this `if (!initialized)` block: merging
+		// twice would add the glyph range to the atlas twice.
+		if (!ImGui::MergeIconsWithLatestFont(11.f, false))
+			ConPrint("Failed to merge the icon font; notifications will render without icons", Color(255, 200, 0));
+
+		boldMenuFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBoldBytes, sizeof(verdanaBoldBytes), 11.f, &staticFontCfg);
+		massiveFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBoldBytes, sizeof(verdanaBoldBytes), 34.f, &staticFontCfg);
+		tabFont = io.Fonts->AddFontFromMemoryTTF((void*)rawTabBytes, sizeof(rawTabBytes), 42.f, &staticFontCfg);
 #ifdef _DEBUG
-		executorFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBytes, sizeof(verdanaBytes), 14);
+		executorFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBytes, sizeof(verdanaBytes), 14.f, &staticFontCfg);
 #endif
 
 		initialized = true;
@@ -129,11 +146,14 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();
 
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.f); // Round borders
-	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(43.f / 255.f, 43.f / 255.f, 43.f / 255.f, 100.f / 255.f)); // Background color
-	ImGui::RenderNotifications(); // <-- Here we render all notifications
-	ImGui::PopStyleVar(1); // Don't forget to Pop()
+	// Notifications draw on their own windows, outside the menu, so they are
+	// rendered whether or not the menu is open.  RenderNotifications() returns
+	// early without a valid context, and the push/pop pair stays balanced.
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.f);
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(43.f / 255.f, 43.f / 255.f, 43.f / 255.f, 100.f / 255.f));
+	ImGui::RenderNotifications();
 	ImGui::PopStyleColor(1);
+	ImGui::PopStyleVar(1);
 
 	if (EngineClient->IsInGame())
 	{
