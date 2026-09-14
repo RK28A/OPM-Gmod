@@ -1,3 +1,28 @@
+# OPM-Gmod
+
+A hardened fork of [GMod-SDK](https://github.com/Gaztoof/GMod-SDK) at the head
+of [PR #64](https://github.com/Gaztoof/GMod-SDK/pull/64), carrying the fixes
+from that pull request's code review.
+
+**Start with [REVIEW.md](REVIEW.md)** — it maps the review's 200 findings to
+what was changed, what was decided differently, and what is deliberately still
+open (including a Font Awesome licensing problem and the manual runtime pass
+that still has to be done in-game).
+
+Build status and the host-side test suite:
+
+```
+cd tests && make test   # 24 cases, no Windows or DirectX needed
+make asan               # the same suite under ASan + UBSan
+```
+
+CI builds Debug and Release for Win32 and x64, runs the tests on gcc and clang
+with warnings as errors, and runs clang-tidy. See `.github/workflows/ci.yml`.
+
+Upstream's own README follows.
+
+---
+
 # GMod-SDK
 
 
