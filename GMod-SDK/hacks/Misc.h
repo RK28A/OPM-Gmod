@@ -3,81 +3,162 @@
 #include "../tier0/Vector.h"
 #include "../globals.hpp"
 #include "../ImGui/imgui.h"
-#include "ImGui/imgui-notify/imgui_notify.h"
+// Relative like every other include in this directory.  The bare
+// "ImGui/imgui-notify/..." form only resolved through the Visual Studio include
+// directories and broke as soon as the project was built another way.
+#include "../ImGui/imgui-notify/imgui_notify.h"
 
-const char* killMessages[]{
+#include <array>
+#include <iostream>
+#include <memory>
+#include <random>
+#include <string>
+#include <utility>
+
+inline constexpr std::array<const char*, 8> killMessages{
     "Hah, you died!",
     "too bad you're dead",
-    "you indirectly got raped by gaztoof",
-    "gaztoof indirectly raped ya",
     "lmao you ded",
     "i feel bad for you lmao",
     "get yourself more skills",
     "ez noob",
     "ezzzzz",
-    "you might want to check this out: https://www.unknowncheats.me/forum/3137947-post1.html",
-    "you got raped by: https://www.unknowncheats.me/forum/3137947-post1.html",
-    "i use this: https://www.unknowncheats.me/forum/3137947-post1.html",
-    "you got raped by GMOD-SDK",
+    "you got outplayed by GMOD-SDK",
 };
-const char* hitMarkers[]{
+
+inline constexpr std::array<const char*, 2> hitMarkers{
     "physics/metal/metal_solid_impact_bullet2.wav",
     "training/timer_bell.wav",
 };
 
+// The config loader bounds Settings::Misc::hitmarkerSound against this count
+// without being able to see the table itself; keep the two in step.
+static_assert(hitMarkers.size() == static_cast<std::size_t>(Settings::Misc::kHitmarkerSoundCount),
+    "Settings::Misc::kHitmarkerSoundCount is out of sync with hitMarkers[]");
+
+namespace EventUtils
+{
+    // Player names come straight off the wire.  Cap them well below the toast
+    // limit so one very long nickname cannot push the rest of the line away.
+    inline constexpr std::size_t kMaxPlayerNameLength = 32;
+
+    // rand() % n is biased and shares global state with anything else in the
+    // process that seeds it; <random> costs nothing here.
+    [[nodiscard]] inline std::size_t RandomIndex(std::size_t count)
+    {
+        if (count == 0)
+            return 0;
+
+        static std::mt19937 engine{ std::random_device{}() };
+        std::uniform_int_distribution<std::size_t> distribution(0, count - 1);
+        return distribution(engine);
+    }
+
+    [[nodiscard]] inline bool IsValidPlayerIndex(int index)
+    {
+        if (!EngineClient || index <= 0)
+            return false;
+
+        const int maxClients = EngineClient->GetMaxClients();
+        return maxClients > 0 && index <= maxClients;
+    }
+
+    // Returns the player's sanitised name, or an empty string when the slot does
+    // not resolve to a real player.
+    //
+    // GetPlayerInfo()'s return value used to be discarded and player_info_s left
+    // uninitialised, so a failed lookup meant strlen() walked whatever happened
+    // to be on the stack.
+    [[nodiscard]] inline std::string GetPlayerName(int index)
+    {
+        if (!IsValidPlayerIndex(index))
+            return std::string();
+
+        player_info_s info{};
+        if (!EngineClient->GetPlayerInfo(index, &info))
+            return std::string();
+
+        // Do not assume the engine terminated the buffer for us.
+        info.name[sizeof(info.name) - 1] = '\0';
+
+        return notify::Sanitize(info.name, kMaxPlayerNameLength);
+    }
+} // namespace EventUtils
 
 // https://wiki.facepunch.com/gmod/Game_Events
-class DamageEvent : IGameEventListener2
+//
+// `public` inheritance is load-bearing: `class DamageEvent : IGameEventListener2`
+// is private inheritance, which is why registration needed a C cast to paper
+// over the inaccessible base.
+class DamageEvent : public IGameEventListener2
 {
 public:
-    DamageEvent(void) {};
-    ~DamageEvent(void) {};
+    DamageEvent() = default;
+    ~DamageEvent() override = default;
+
     void FireGameEvent(IGameEvent* event) override
     {
-        if (!event)
+        if (!event || !EngineClient)
             return;
-        int localPlayerID = EngineClient->GetLocalPlayer();
-        int target = EngineClient->GetPlayerForUserID(event->GetInt("userid")); // UserID of the victim
-        int attacker = EngineClient->GetPlayerForUserID(event->GetInt("attacker")); // UserID of the attacker
 
-        player_info_s targetInfo;
-        player_info_s attackerInfo;
-        EngineClient->GetPlayerInfo(target, &targetInfo);
-        EngineClient->GetPlayerInfo(attacker, &attackerInfo);
+        const int localPlayerID = EngineClient->GetLocalPlayer();
+        const int target = EngineClient->GetPlayerForUserID(event->GetInt("userid"));
+        const int attacker = EngineClient->GetPlayerForUserID(event->GetInt("attacker"));
 
-        if (strlen(attackerInfo.name))
+        // player_hurt fires for every player on the server.  Upstream raised a
+        // toast for all of them before this filter, so a busy server opened a
+        // notification window per hit between two strangers.
+        const bool localPlayerDealtDamage = (attacker == localPlayerID && target != localPlayerID);
+        if (!localPlayerDealtDamage)
+            return;
+
+        if (Settings::Misc::damageNotifications)
         {
-            std::string outputString = string_format("%s attacked %s. NEW HP: %i", attackerInfo.name, targetInfo.name, event->GetInt("health"));
-            std::cout << outputString.c_str() << std::endl;
-            ImGuiToast toast(ImGuiToastType_None, 3000); // <-- content can also be passed here as above
-            toast.set_title("Damage-Event");
-            toast.set_content(outputString.c_str());
-            ImGui::InsertNotification(toast);
+            const std::string attackerName = EventUtils::GetPlayerName(attacker);
+            const std::string targetName = EventUtils::GetPlayerName(target);
+
+            if (!attackerName.empty() && !targetName.empty())
+            {
+                const std::string message = notify::Format("%s attacked %s. NEW HP: %i",
+                    attackerName.c_str(), targetName.c_str(), event->GetInt("health"));
+
+                std::cout << message << std::endl;
+
+                notify::Toast toast(notify::Type::Info, 3000);
+                toast.SetTitle("Damage");
+                // SetContent and not SetContentFormat: `message` embeds a player
+                // nickname, and a nickname must never be read as a printf format.
+                toast.SetContent(message.c_str());
+                ImGui::InsertNotification(std::move(toast));
+            }
         }
 
-        if (target == localPlayerID || attacker != localPlayerID)
-            return;
+        if (Settings::Misc::hitmarkerSoundEnabled && MatSystemSurface)
+        {
+            // A hand-edited config could point this anywhere.
+            const int soundIndex = Settings::Misc::hitmarkerSound;
+            if (soundIndex >= 0 && static_cast<std::size_t>(soundIndex) < hitMarkers.size())
+                MatSystemSurface->PlaySound(hitMarkers[static_cast<std::size_t>(soundIndex)]);
+        }
 
-        if (Settings::Misc::hitmarkerSoundEnabled)
-            MatSystemSurface->PlaySound(hitMarkers[Settings::Misc::hitmarkerSound]);
-        
         Settings::lastHitmarkerTime = EngineClient->Time();
     }
 };
-class DeathEvent : IGameEventListener2
+
+class DeathEvent : public IGameEventListener2
 {
 public:
-    DeathEvent(void) {};
-    ~DeathEvent(void) {};
+    DeathEvent() = default;
+    ~DeathEvent() override = default;
+
     void FireGameEvent(IGameEvent* event) override
     {
-        if (!event)
+        if (!event || !EngineClient)
             return;
-        int localPlayerID = EngineClient->GetLocalPlayer();
-        int target = event->GetInt("entindex_killed"); // Entity Index of the victim
-        int attacker = event->GetInt("entindex_attacker"); // Entity Index of the attacker
 
-        // event->GetInt("damagebits"), do whatever you want with that i'm lazy rn
+        const int localPlayerID = EngineClient->GetLocalPlayer();
+        const int target = event->GetInt("entindex_killed");
+        const int attacker = event->GetInt("entindex_attacker");
 
         if (target == localPlayerID || attacker != localPlayerID)
             return;
@@ -87,12 +168,69 @@ public:
             std::string command = "say \"";
             if (Settings::Misc::killMessageOOC)
                 command += "/ooc ";
-            command += killMessages[rand() % (sizeof(killMessages) / sizeof(uintptr_t))];
+            command += killMessages[EventUtils::RandomIndex(killMessages.size())];
             command += "\"";
             EngineClient->ClientCmd_Unrestricted(command.c_str());
         }
     }
 };
+
+namespace GameEvents
+{
+    // Owning handles.  Upstream stored these as raw `new` results in two
+    // `void*` globals: no type, no ownership, and no way to take them back off
+    // the engine before the module went away.
+    inline std::unique_ptr<DamageEvent> damageEvent;
+    inline std::unique_ptr<DeathEvent> deathEvent;
+
+    // The engine keeps the raw pointers we hand to AddListener(), so they have
+    // to be removed before the objects die -- otherwise the next event calls
+    // into freed memory.
+    inline void Unregister()
+    {
+        if (GameEventManager)
+        {
+            if (damageEvent)
+                GameEventManager->RemoveListener(damageEvent.get());
+            if (deathEvent)
+                GameEventManager->RemoveListener(deathEvent.get());
+        }
+
+        damageEvent.reset();
+        deathEvent.reset();
+    }
+
+    // Idempotent: if Main() ever runs twice, the engine must not end up with two
+    // copies of each listener firing the same notification.
+    inline bool Register()
+    {
+        if (!GameEventManager)
+        {
+            ConPrint("GameEventManager unavailable: game events disabled", Color(255, 0, 0));
+            return false;
+        }
+
+        if (damageEvent || deathEvent)
+            return true;
+
+        damageEvent = std::make_unique<DamageEvent>();
+        deathEvent = std::make_unique<DeathEvent>();
+
+        GameEventManager->AddListener(damageEvent.get(), "player_hurt", false);
+        GameEventManager->AddListener(deathEvent.get(), "entity_killed", false);
+
+        // AddListener is typed void* in this vtable, so confirm through
+        // FindListener instead of assuming it worked.
+        const bool damageRegistered = GameEventManager->FindListener(damageEvent.get(), "player_hurt") != nullptr;
+        const bool deathRegistered = GameEventManager->FindListener(deathEvent.get(), "entity_killed") != nullptr;
+
+        if (!damageRegistered || !deathRegistered)
+            ConPrint("Warning: a game event listener may not have registered", Color(255, 200, 0));
+
+        return damageRegistered && deathRegistered;
+    }
+} // namespace GameEvents
+
 void ThirdPerson(CViewSetup& view)
 {
     trace_t trace;

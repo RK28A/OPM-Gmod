@@ -106,10 +106,14 @@ ButtonCode_t VKToButtonCode(int input)
 	}\
 }
 
+// Returns nullptr for an out-of-range hitbox id.  It used to read
+// Settings::Aimbot::aimbotHitbox directly and ignore `input`, and to return ""
+// for an unknown value -- which Studio_BoneIndexByName() then matched against
+// every bone name in the model.
+// https://wiki.facepunch.com/gmod/Entity:GetBoneName
 const char* IntToBoneName(int input)
 {
-	// https://wiki.facepunch.com/gmod/Entity:GetBoneName
-	switch (Settings::Aimbot::aimbotHitbox)
+	switch (input)
 	{
 	case 0:
 		return "ValveBiped.Bip01_Head1";
@@ -117,16 +121,20 @@ const char* IntToBoneName(int input)
 		return "ValveBiped.Bip01_Spine2"; // chest
 	case 2:
 		return "ValveBiped.Bip01_Pelvis"; // stomach
+	default:
+		return nullptr;
 	}
-	return "";
 }
 std::wstring StringToWString(std::string input)
 {
 	return std::wstring(input.begin(), input.end()); 
 }
 
-mstudiobone_t* Studio_BoneIndexByName(studiohdr_t* pStudioHdr, char const* pName, int* outIndex = NULL)
+mstudiobone_t* Studio_BoneIndexByName(studiohdr_t* pStudioHdr, char const* pName, int* outIndex = nullptr)
 {
+	if (!pStudioHdr || !pName)
+		return nullptr;
+
 	int start = 0, end = pStudioHdr->numbones - 1;
 	const BYTE* pBoneTable = pStudioHdr->GetBoneTableSortedByName();
 	mstudiobone_t* pbones = pStudioHdr->pBone(0);
@@ -147,7 +155,7 @@ mstudiobone_t* Studio_BoneIndexByName(studiohdr_t* pStudioHdr, char const* pName
 		}
 		else
 		{
-			if(outIndex != NULL)
+			if (outIndex != nullptr)
 				*outIndex = pBoneTable[mid];
 
 			return pStudioHdr->pBone(pBoneTable[mid]);

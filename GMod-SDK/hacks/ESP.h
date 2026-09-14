@@ -74,21 +74,28 @@ void doEsp()
 				continue;
 
 
-			matrix3x4_t bones[128];
+			// Same bound as the SetupBones() call below; every index into this
+			// array has to be checked against it.
+			constexpr int kMaxBones = 128;
+			matrix3x4_t bones[kMaxBones];
 			if (((Settings::ESP::skeletonEsp) || Settings::Aimbot::drawAimbotHeadlines) && // Sometimes SetupBones will crash, and so adding these checks won't make you crash at round beginning if you disable features that need setupbones
 				((uintptr_t)entity->GetClientRenderable() < 0x1000 ||
-					!entity->GetClientRenderable()->SetupBones(bones, 128, BONE_USED_BY_HITBOX, EngineClient->Time())))
+					!entity->GetClientRenderable()->SetupBones(bones, kMaxBones, BONE_USED_BY_HITBOX, EngineClient->Time())))
 				continue;
 
 			int z = -1;
 
 			studiohdr_t* studioHdr = ModelInfo->GetStudiomodel((const model_t*)entity->GetClientRenderable()->GetModel());
+			if (!studioHdr)
+				continue;
 
 			if (Settings::ESP::skeletonEsp)
-				for (int z = 0; z < studioHdr->numbones; z++)
+				for (int z = 0; z < studioHdr->numbones && z < kMaxBones; z++)
 				{
 					auto bone = studioHdr->pBone(z);
-					if (bone && bone->parent >= 0)
+					// numbones can exceed what SetupBones() filled in, and
+					// parent is an index into the same array.
+					if (bone && bone->parent >= 0 && bone->parent < kMaxBones)
 					{
 						if (!Settings::ESP::skeletonDetails && !(bone->flags & 256))
 							continue;
@@ -106,12 +113,18 @@ void doEsp()
 					}
 				}
 
-			int selectedHitBox = 0; // that crashes x86
-			Studio_BoneIndexByName(studioHdr, IntToBoneName(Settings::Aimbot::aimbotHitbox), &selectedHitBox);
+			// The lookup can fail (unknown hitbox id, or a model without that
+			// bone) and used to leave selectedHitBox at 0 -- or, worse, at an
+			// index the caller never validated -- before indexing bones[].
+			int selectedHitBox = -1;
+			const char* headlineBone = IntToBoneName(Settings::Aimbot::aimbotHitbox);
+			const bool hasHitBox =
+				Studio_BoneIndexByName(studioHdr, headlineBone, &selectedHitBox) != nullptr
+				&& selectedHitBox >= 0 && selectedHitBox < kMaxBones;
 
 			Vector screenEyePos;
 			screenEyePos.z = 0;
-			if (Settings::Aimbot::drawAimbotHeadlines && WorldToScreen(Vector(bones[selectedHitBox][0][3], bones[selectedHitBox][1][3], bones[selectedHitBox][2][3]), screenEyePos) && Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0).DistTo(screenEyePos) < Settings::Aimbot::aimbotFOV)
+			if (hasHitBox && Settings::Aimbot::drawAimbotHeadlines && WorldToScreen(Vector(bones[selectedHitBox][0][3], bones[selectedHitBox][1][3], bones[selectedHitBox][2][3]), screenEyePos) && Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0).DistTo(screenEyePos) < Settings::Aimbot::aimbotFOV)
 			{
 				// white if random person, blue'ish if target
 
@@ -119,8 +132,14 @@ void doEsp()
 				DrawLine(Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0), screenEyePos, color);
 			}
 
-			player_info_s info;
-			EngineClient->GetPlayerInfo(i, &info);
+			// Zero-initialised and checked: a failed lookup used to leave the
+			// struct indeterminate, and info.name / info.guid were read anyway.
+			player_info_s info{};
+			if (!EngineClient->GetPlayerInfo(i, &info))
+				continue;
+
+			info.name[sizeof(info.name) - 1] = '\0';
+			info.guid[sizeof(info.guid) - 1] = '\0';
 
 			Vector targetScrMaxs;
 			Vector targetScrMins;
