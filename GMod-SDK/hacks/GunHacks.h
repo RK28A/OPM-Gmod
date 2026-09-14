@@ -52,15 +52,20 @@ void NoSpread(CUserCmd* cmd, C_BaseCombatWeapon* gun, CLuaInterface* Lua)
 			cmd->viewangles -= localPlayer->GetViewPunch();
 
 			// Basically, reversing the previous usercmd's angles will simply max out the Recoil
-			if (cmd->command_number)
+			// GetUserCmd() returns null for a slot that is not backed by a real
+			// command; the result was dereferenced straight away.
+			if (cmd->command_number && Input)
 			{
 				CUserCmd* prevCmd = Input->GetUserCmd(cmd->command_number - 1);
-				prevCmd->viewangles.x = -cmd->viewangles.x;
-				prevCmd->viewangles.y = cmd->viewangles.y - 180.f;
-				prevCmd->viewangles.FixAngles();
+				if (prevCmd)
+				{
+					prevCmd->viewangles.x = -cmd->viewangles.x;
+					prevCmd->viewangles.y = cmd->viewangles.y - 180.f;
+					prevCmd->viewangles.FixAngles();
 
-				Input->m_pVerifiedCommands[prevCmd->command_number % 90].m_cmd = *prevCmd;
-				Input->m_pVerifiedCommands[prevCmd->command_number % 90].m_crc = prevCmd->GetChecksum();
+					Input->m_pVerifiedCommands[prevCmd->command_number % 90].m_cmd = *prevCmd;
+					Input->m_pVerifiedCommands[prevCmd->command_number % 90].m_crc = prevCmd->GetChecksum();
+				}
 			}
 			// 		Dir = (self.Owner:EyeAngles() + self.Owner:GetViewPunchAngles() + Angle(math.Rand(-cone, cone), math.Rand(-cone, cone), 0) * 25):Forward()
 
@@ -94,20 +99,22 @@ void NoSpread(CUserCmd* cmd, C_BaseCombatWeapon* gun, CLuaInterface* Lua)
 			cmd->viewangles -= localPlayer->GetViewPunch();
 
 			// Basically, reversing the previous usercmd's angles will simply max out the Recoil
-			if (cmd->command_number)
+			if (cmd->command_number && Input)
 			{
 				CUserCmd* prevcmd = cmd;
 				for (int i = 0; i < 3; i++)
 				{
-					CUserCmd* cmd = Input->GetUserCmd(prevcmd->command_number - 1);
-					cmd->viewangles.y = prevcmd->viewangles.y - 180.f;
-					cmd->viewangles.x = -prevcmd->viewangles.x;
-					cmd->viewangles.FixAngles();
+					CUserCmd* prev = Input->GetUserCmd(prevcmd->command_number - 1);
+					if (!prev)
+						break;
+					prev->viewangles.y = prevcmd->viewangles.y - 180.f;
+					prev->viewangles.x = -prevcmd->viewangles.x;
+					prev->viewangles.FixAngles();
 
-					Input->m_pVerifiedCommands[cmd->command_number % 90].m_cmd = *cmd;
-					Input->m_pVerifiedCommands[cmd->command_number % 90].m_crc = cmd->GetChecksum();
+					Input->m_pVerifiedCommands[prev->command_number % 90].m_cmd = *prev;
+					Input->m_pVerifiedCommands[prev->command_number % 90].m_crc = prev->GetChecksum();
 
-					prevcmd = cmd;
+					prevcmd = prev;
 				}
 			}
 			// 		Dir = (self.Owner:EyeAngles() + self.Owner:GetViewPunchAngles() + Angle(math.Rand(-cone, cone), math.Rand(-cone, cone), 0) * 25):Forward()

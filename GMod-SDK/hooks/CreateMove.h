@@ -22,7 +22,10 @@ bool __fastcall hkCreateMove(ClientModeShared* ClientMode,
 	Globals::lastCmd = *cmd;
 
 	localPlayer = (C_BasePlayer*)ClientEntityList->GetClientEntity(EngineClient->GetLocalPlayer());
-	*Globals::bSendpacket = true;
+	// bSendpacket is resolved by a signature scan at start-up (Main); it is null
+	// if that scan failed, and it is dereferenced on several paths below.
+	if (Globals::bSendpacket)
+		*Globals::bSendpacket = true;
 	if (localPlayer && localPlayer->IsAlive() && !Settings::currentlyInFreeCam  && cmd->tick_count != 0)
 	{
 		DoMisc(cmd);
@@ -80,7 +83,7 @@ bool __fastcall hkCreateMove(ClientModeShared* ClientMode,
 		cmd->viewangles.FixAngles();
 	auto thisCmd = *cmd;
 	oCreateMove(ClientMode, flInputSampleTime, cmd);
-	if (Settings::Misc::fakeLag)
+	if (Settings::Misc::fakeLag && Globals::bSendpacket)
 	{
 		static int m_nChokedPackets = 0;
 		bool fakeLagKeyDown = false;
@@ -97,10 +100,13 @@ bool __fastcall hkCreateMove(ClientModeShared* ClientMode,
 				m_nChokedPackets = 0;
 			}
 	}
-	if (*Globals::bSendpacket && cmd->tick_count != 0)
+	// This block runs outside the `localPlayer && IsAlive()` guard above, so
+	// localPlayer can be null here, and GetClientRenderable() can be null too.
+	if (Globals::bSendpacket && *Globals::bSendpacket && cmd->tick_count != 0 && localPlayer)
 	{
 		Globals::lastNetworkedCmd = thisCmd;
-		localPlayer->GetClientRenderable()->SetupBones(Globals::lastMatrix, 128, BONE_USED_BY_HITBOX, GlobalVars->curtime);
+		if (IClientRenderable* renderable = localPlayer->GetClientRenderable())
+			renderable->SetupBones(Globals::lastMatrix, 128, BONE_USED_BY_HITBOX, GlobalVars->curtime);
 	}
 	Globals::lastEndCmd = *cmd;
 	return false;
