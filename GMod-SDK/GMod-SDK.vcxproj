@@ -218,6 +218,7 @@
     <ClInclude Include="engine\IStudioRender.h" />
     <ClInclude Include="engine\takedamageinfo.h" />
     <ClInclude Include="engine\trace.h" />
+    <ClInclude Include="hacks\AdminEsp.h" />
     <ClInclude Include="hacks\AntiAim.h" />
     <ClInclude Include="hacks\AutoWall.h" />
     <ClInclude Include="hacks\ConfigSystem.h" />

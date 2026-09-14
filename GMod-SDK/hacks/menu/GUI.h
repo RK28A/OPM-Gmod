@@ -194,6 +194,32 @@ namespace GUI
 				style->WindowPadding = ImVec2(6, 6);
 
 			} Menu::InsertEndGroupBoxLeft("Chams Cover", "Chams");
+
+			Menu::InsertSpacer("Admin ESP Spacer");
+
+			// Its own group, separate from "Player ESP" above -- driven by
+			// Settings::ESP::adminEsp and rendered by the standalone doAdminEsp()
+			// module (AdminEsp.h).
+			Menu::InsertGroupBoxLeft("Admin ESP", 118.f); {
+
+				style->ItemSpacing = ImVec2(4, 2);
+				style->WindowPadding = ImVec2(4, 4);
+
+				Menu::InsertCheckbox("Show admins", &Settings::ESP::adminEsp);
+				Menu::InsertColorPicker("##Admin color", &Settings::ESP::adminEspColor, false);
+				Menu::InsertTooltip("Highlights server staff (Player:IsAdmin) through walls, with their name. Separate from the player ESP.");
+
+				Menu::BeginDisabledIf(!Settings::ESP::adminEsp);
+				{
+					Menu::InsertCheckbox("Admin name", &Settings::ESP::adminEspName);
+					Menu::InsertCheckbox("Admin box", &Settings::ESP::adminEspBox);
+				}
+				Menu::EndDisabledIf(!Settings::ESP::adminEsp);
+
+				style->ItemSpacing = ImVec2(0, 0);
+				style->WindowPadding = ImVec2(6, 6);
+
+			} Menu::InsertEndGroupBoxLeft("Admin ESP Cover", "Admin ESP");
 		}
 		ImGui::NextColumn();
 		{
