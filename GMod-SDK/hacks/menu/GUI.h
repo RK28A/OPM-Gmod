@@ -482,7 +482,7 @@ namespace GUI
 							}
 							else if (listHas && !it->second.first)
 							{
-								std::remove(Settings::selectedFriendList.begin(), Settings::selectedFriendList.end(), it->first);
+								Settings::selectedFriendList.erase(std::remove(Settings::selectedFriendList.begin(), Settings::selectedFriendList.end(), it->first), Settings::selectedFriendList.end());
 							}
 							if (toDelete)
 								toRemoveMap.push_back(it->first);
@@ -553,7 +553,7 @@ namespace GUI
 							}
 							else if (!it->second)
 							{
-								std::remove(Settings::selectedLuaEntList.begin(), Settings::selectedLuaEntList.end(), it->first);
+								Settings::selectedLuaEntList.erase(std::remove(Settings::selectedLuaEntList.begin(), Settings::selectedLuaEntList.end(), it->first), Settings::selectedLuaEntList.end());
 							}
 
 								ImGui::Selectable(it->first.c_str(), &it->second);
