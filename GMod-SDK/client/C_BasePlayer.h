@@ -551,7 +551,7 @@ public:
 	}
 	unsigned int getTickBase() {
 #ifdef _WIN64
-		return *(unsigned int*)((uintptr_t)this + 0x2D48);
+		return *(unsigned int*)((uintptr_t)this + 0x2D90); // m_nTickBase (DT_LocalPlayerExclusive)
 #else
 		return *(unsigned int*)((uintptr_t)this + 0x350); // m_nTickBase // THIS IS UNSET!!!!!!!!!!
 #endif
@@ -567,7 +567,7 @@ public:
 	int hitboxSet()
 	{
 #ifdef _WIN64
-		return *(int*)((uintptr_t)this + 0x16D0);
+		return *(int*)((uintptr_t)this + 0x16D8); // m_nHitboxSet (DT_BaseAnimating); 0x16D0 was m_nSkin
 #else
 		return *(int*)((uintptr_t)this + 0x1398); // m_nHitboxSet
 #endif
@@ -584,7 +584,7 @@ public:
 		// Update 30/10/2021: Tests show that you can't sig CalcPlayerView anymore (tested in X64), so here's an alternative:
 		// String XREF "Initialize All Game Systems", you'll find this https://i.imgur.com/rWlXdHI.png, so XREF vieweffects, and the first reference should look like this: https://i.imgur.com/rxXt4Wt.png. That's your CalcPlayerView
 #ifdef _WIN64
-		return *(QAngle*)((uintptr_t)this + 0x2DB0);
+		return *(QAngle*)((uintptr_t)this + 0x29E4); // m_Local (0x29B0) + m_vecPunchAngle (0x34); 0x2DB0 was stale (now m_hLastWeapon)
 #else
 		return *(QAngle*)((uintptr_t)this + 0x24D0); // https://i.imgur.com/Y5hSyqS.png <- that's viewpunch offset. see screenshot above on how to get it, sig the stuff if u want to find it again
 #endif

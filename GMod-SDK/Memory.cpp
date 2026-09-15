@@ -85,12 +85,21 @@ char* GetRealFromRelative(char* address, int offset, int instructionSize, bool i
 #ifdef _WIN64
     isRelative = true;
 #endif
+    // A failed pattern scan hands us a null `address`; dereferencing address+offset
+    // would then fault. Bail to null so the caller sees a clean failure (it is
+    // logged in Main) instead of the game crashing during resolution.
+    if (!address)
+        return nullptr;
     char* instruction = address + offset;
     if (!isRelative)
     {
+        if (!MemIsReadable(instruction, sizeof(char*)))
+            return nullptr;
         return *(char**)(instruction);
     }
 
+    if (!MemIsReadable(instruction, sizeof(int)))
+        return nullptr;
     int relativeAddress = *(int*)(instruction);
     char* realAddress = address + instructionSize + relativeAddress;
     return realAddress;
