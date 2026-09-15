@@ -59,7 +59,8 @@ std::optional<std::string> SaveScript(std::string fileName, std::string fileCont
 
 		if (EngineClient->GetNetChannelInfo() && EngineClient->GetNetChannelInfo()->GetAddress())
 		{
-			std::string hostName = Globals::hostName;
+			// Globals::hostName is a scan-derived char*; std::string(nullptr) is UB.
+			std::string hostName = Globals::hostName ? Globals::hostName : "";
 
 			if (hostName.length()) {
 				std::replace(hostName.begin(), hostName.end(), '/', ' ');
