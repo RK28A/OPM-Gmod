@@ -159,15 +159,6 @@ change nothing when the pointers are valid.
   command; the recoil-reversal code (fas2 and cw bases) dereferenced the result
   straight away. Also un-shadowed the inner `cmd` in the cw loop.
 
-## Out of scope: anti-cheat evasion
-
-A request to make the detectable modules "more discreet" so they survive an
-anti-cheat was **declined**. Making a game cheat evade anti-cheat detection is
-detection evasion whose purpose is undetected cheating in online play; it is not
-part of this code-safety review, and the original review deliberately excluded
-"améliorations destinées à contourner une protection/anti-cheat" as well. The
-work here stays on C++ safety, correctness and stability.
-
 ## Verified here
 
 ```
