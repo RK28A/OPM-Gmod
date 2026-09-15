@@ -171,11 +171,12 @@ int GetUserId(int entListIndex)
 	EngineClient->GetPlayerInfo(entListIndex, &info);
 	return info.userID;
 }
-const char* GetSteamID(int entListIndex)
+std::string GetSteamID(int entListIndex)
 {
-	player_info_s info;
+	player_info_s info{};
 	EngineClient->GetPlayerInfo(entListIndex, &info);
-	return info.guid;
+	info.guid[sizeof(info.guid) - 1] = '\0'; // GetPlayerInfo may leave guid unterminated
+	return info.guid; // by value: returning info.guid directly is a dangling pointer into the local (C4172)
 }
 
 #include "../Memory.h"
