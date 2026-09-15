@@ -8,6 +8,7 @@
 
 #include "Interface.h"
 #include "globals.hpp"
+#include "hacks/Debug.h"
 
 #include "hooks/DrawModelExecute.h"
 #include "hooks/CreateMove.h"
@@ -36,6 +37,12 @@ void Main()
     SetConsoleTitle(L"GMod SDK - WIP - Coded by t.me/Gaztoof");
 #endif
     ConColorMsg = (MsgFn)GetProcAddress(GetModuleHandleW(L"tier0.dll"), ConColorMsgDec);
+
+    // Install the crash reporter / logger before the signature scans below, so
+    // an early fault (e.g. a pattern that no longer matches after an update)
+    // still produces a crash.log instead of a silent game crash.
+    Debug::Install();
+    DBG_INFO("Main() start");
 
     ConPrint("Successfully injected!", Color(0, 255, 0));
     ConfigSystem::HandleConfig("Default", ConfigSystem::configHandle::Load);
@@ -75,6 +82,25 @@ void Main()
     UniformRandomStream = GetVMT<CUniformRandomStream>((uintptr_t)GetProcAddress(GetModuleHandleA("vstdlib.dll"), "RandomSeed"), RandomSeedOffset); // RandomSeed points to s_pUniformStream https://i.imgur.com/bddk0QK.png
     
     localPlayer = (C_BasePlayer*)ClientEntityList->GetClientEntity(EngineClient->GetLocalPlayer());
+
+    // Debug: a null critical interface or a null scan-derived pointer is the
+    // usual root cause of an early crash after a game update. Log them once so
+    // the reason is in debug.log instead of guessed at.
+    {
+        const struct { const char* name; const void* ptr; } criticals[] = {
+            { "EngineClient", EngineClient }, { "ClientEntityList", ClientEntityList },
+            { "CHLclient", CHLclient }, { "MaterialSystem", MaterialSystem },
+            { "CVar", CVar }, { "ModelRender", ModelRender }, { "RenderView", RenderView },
+            { "EngineTrace", EngineTrace }, { "GameEventManager", GameEventManager },
+            { "MatSystemSurface", MatSystemSurface }, { "ModelInfo", ModelInfo },
+            { "LuaShared", LuaShared }, { "Prediction", Prediction }, { "GameMovement", GameMovement },
+            { "bSendpacket", Globals::bSendpacket }, { "predictionRandomSeed", Globals::predictionRandomSeed },
+            { "hostName", Globals::hostName },
+        };
+        for (const auto& c : criticals)
+            if (!c.ptr) DBG_WARN("%s resolved to null", c.name);
+        DBG_INFO("Init complete: localPlayer=%p, slot=%d", (void*)localPlayer, EngineClient->GetLocalPlayer());
+    }
 
     if(Lua = LuaShared->GetLuaInterface((unsigned char)LuaInterfaceType::LUA_CLIENT))
         oRunStringEx = VMTHook< _RunStringEx>((PVOID**)Lua, (PVOID)hkRunStringEx, 111);

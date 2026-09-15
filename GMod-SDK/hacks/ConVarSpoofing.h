@@ -15,9 +15,18 @@ public:
 		Spoof();
 	}
 	~SpoofedConVar() {
+		// Spoof() is a no-op when constructed from a null cvar (e.g. FindVar
+		// failed), which leaves both pointers null; the destructor must not
+		// assume it ran.
+		if (m_pDummyCVar) {
+			if (CVar)
+				CVar->UnregisterConCommand(m_pDummyCVar);
+			free(m_pDummyCVar);
+			m_pDummyCVar = nullptr;
+		}
 
-		CVar->UnregisterConCommand(m_pDummyCVar);
-		free(m_pDummyCVar);
+		if (!m_pOriginalCVar)
+			return;
 
 		DWORD dwOld;
 		VirtualProtect((LPVOID)m_pOriginalCVar->pszName, 128, PAGE_READWRITE, &dwOld);
