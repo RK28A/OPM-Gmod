@@ -160,7 +160,11 @@ namespace notify
 			break;
 		}
 
-		percent = std::max(0.f, std::min(1.f, percent));
+		// std::clamp rather than std::max(std::min(...)): once this header is
+		// pulled into the module's translation unit after <Windows.h>, the
+		// min()/max() macros break a bare std::min/std::max (MSVC C2589).  clamp
+		// has no such macro.
+		percent = std::clamp(percent, 0.f, 1.f);
 		return percent * kOpacity;
 	}
 
@@ -177,7 +181,10 @@ namespace notify
 			return std::string();
 
 		std::string out;
-		out.reserve(std::min(max_length, std::strlen(text)));
+		// (std::min), parenthesised so the <Windows.h> min() macro (active in
+		// the module's translation unit) cannot expand it -- see the note on
+		// FadePercentFor above.
+		out.reserve((std::min)(max_length, std::strlen(text)));
 
 		for (const char* it = text; *it != '\0'; ++it)
 		{
