@@ -38,7 +38,11 @@ namespace AngleMath
 		if (!std::isfinite(pitch))
 			return 0.f;
 
-		return std::max(kMinPitch, std::min(kMaxPitch, pitch));
+		// std::clamp, not std::max(std::min(...)): the module compiles this
+		// header into a translation unit that has already included <Windows.h>,
+		// whose min()/max() function-like macros turn a bare std::min/std::max
+		// into "std::(" -- MSVC C2589.  There is no clamp macro to collide with.
+		return std::clamp(pitch, kMinPitch, kMaxPitch);
 	}
 
 	// Signed shortest way round from `current` to `target`.
@@ -85,7 +89,7 @@ namespace AngleMath
 	template <class TAngle>
 	[[nodiscard]] TAngle SmoothTowards(const TAngle& current, const TAngle& target, float factor) noexcept
 	{
-		const float f = std::isfinite(factor) ? std::max(0.f, std::min(1.f, factor)) : 1.f;
+		const float f = std::isfinite(factor) ? std::clamp(factor, 0.f, 1.f) : 1.f;
 
 		const float pitch = current.x + ShortestDelta(target.x, current.x) * f;
 		const float yaw = current.y + ShortestDelta(target.y, current.y) * f;
