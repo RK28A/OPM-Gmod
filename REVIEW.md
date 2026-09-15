@@ -172,3 +172,48 @@ $ make asan          # ASan + UBSan
 The MSBuild job has **not** been run — there is no Windows toolchain in the
 environment these commits were written in. Treat its first run as part of
 review.
+
+## Offset refresh + crash-free resolution
+
+Two related changes, both x64 only (the x86 branches are untouched):
+
+### Netvar offsets re-synced to a fresh dump
+
+Hard-coded x64 netvar offsets had drifted after a Garry's Mod update. Corrected
+against a current `client.dll` netvar dump (table names in comments):
+
+- `c_basecombatweapon.h` — `m_iClip1` `0x1C48 → 0x1C50`, `m_iClip2`
+  `0x1C4C → 0x1C54`, `m_flNextPrimaryAttack` `0x1BFC → 0x1C04`,
+  `m_flNextSecondaryAttack` `0x1C00 → 0x1C08` (the whole active/local weapon
+  block shifted +8).
+- `C_BasePlayer.h` — `m_nTickBase` `0x2D48 → 0x2D90`, `m_nHitboxSet`
+  `0x16D0 → 0x16D8` (the old value was `m_nSkin`), view punch
+  `0x2DB0 → 0x29E4` (= `m_Local` `0x29B0` + `m_vecPunchAngle` `0x34`; the old
+  value now lands on `m_hLastWeapon`, so "no visual recoil" was writing into a
+  weapon handle).
+
+Left as-is because they are **not** networked and so are absent from a netvar
+dump — they can only be re-reversed against the binary: `getMoveType`
+(`m_MoveType`), `IsDormant`, `GetModelPtr`.
+
+### Init no longer crashes on a stale offset/scan
+
+Separate from the netvar values above, several pointers come from hard-coded
+byte offsets into game functions (`ViewRenderOffset`, `GlobalVarsOffset`, …) or
+from signature scans. When one of those rots after an update it resolves to a
+wild pointer, and the code dereferenced it immediately — this is what took the
+game down at the RenderView VMT hook. Now:
+
+- `MemIsReadable()` (Memory.h) — `VirtualQuery`-based check that a range is
+  committed and readable.
+- `GetVMT` / `GetRealFromRelative` / `VMTHook` validate every dereference and
+  return null instead of faulting; `GuardedVMTHook` (dllmain.cpp) and the
+  `present` install site log the offender by name and skip it.
+- Main() logs each offset/scan-derived pointer and whether it is readable, so
+  `debug.log` names exactly which offset to re-reverse.
+
+This makes a stale offset a *degraded load* (that feature is off, logged) rather
+than a crash. It does **not** fix the offsets it can't see: `ViewRenderOffset`
+(and the other code-scan offsets in `globals.hpp`) still need re-reversing
+against the current binary — a netvar dump does not contain them. Until then the
+RenderView-dependent visuals stay disabled and say so in the log.

@@ -25,6 +25,24 @@
 #include "hacks/ConVarSpoofing.h"
 #include "engine/inetmessage.h"
 
+// Installs a VMT hook, but first checks the target object and the specific
+// vtable slot are actually mapped, and logs the outcome by name. After a
+// Garry's Mod update a hard-coded offset/scan can resolve an interface to a
+// wild pointer; hooking through it used to take the whole game down (the
+// RenderView hook was the usual casualty). Now it is logged and skipped, so
+// the rest of the module still loads and debug.log points at the stale offset.
+template<typename T>
+static T GuardedVMTHook(const char* name, PVOID** src, PVOID dst, int index, bool noRestore = false)
+{
+    if (!MemIsReadable(src) || !MemIsReadable(*src, (static_cast<size_t>(index) + 1) * sizeof(PVOID)))
+    {
+        DBG_ERROR("Hook '%s' skipped: object %p unreadable (stale offset/scan after a game update?)", name, (void*)src);
+        return (T)nullptr;
+    }
+    DBG_INFO("Hook '%s' installed (object %p, vtable index %d)", name, (void*)src, index);
+    return VMTHook<T>(src, dst, index, noRestore);
+}
+
 void Main()
 {
     ZeroMemory(Settings::ScriptInput, sizeof(Settings::ScriptInput));
@@ -100,21 +118,43 @@ void Main()
         for (const auto& c : criticals)
             if (!c.ptr) DBG_WARN("%s resolved to null", c.name);
         DBG_INFO("Init complete: localPlayer=%p, slot=%d", (void*)localPlayer, EngineClient->GetLocalPlayer());
+
+        // These come from hard-coded byte offsets into game functions
+        // (ViewRenderOffset, GlobalVarsOffset, ...) rather than named
+        // interfaces, so they are what rots first after a game update. A stale
+        // offset produces a non-null but *garbage* pointer that crashes the
+        // moment it is used, so log the resolved value AND whether it points at
+        // readable memory -- that single line in debug.log tells you exactly
+        // which offset to re-reverse.
+        const struct { const char* name; void* ptr; } derived[] = {
+            { "ViewRender", ViewRender }, { "ClientMode", ClientMode },
+            { "GlobalVars", GlobalVars }, { "Input", Input },
+            { "ClientState", ClientState }, { "UniformRandomStream", UniformRandomStream },
+        };
+        for (const auto& d : derived)
+        {
+            if (!d.ptr)
+                DBG_WARN("%s resolved to null (stale offset?)", d.name);
+            else if (!MemIsReadable(d.ptr))
+                DBG_ERROR("%s resolved to unreadable %p -- stale offset, re-reverse it", d.name, d.ptr);
+            else
+                DBG_INFO("%s = %p", d.name, d.ptr);
+        }
     }
 
     if(Lua = LuaShared->GetLuaInterface((unsigned char)LuaInterfaceType::LUA_CLIENT))
-        oRunStringEx = VMTHook< _RunStringEx>((PVOID**)Lua, (PVOID)hkRunStringEx, 111);
-    oCreateLuaInterfaceFn = VMTHook<_CreateLuaInterfaceFn>((PVOID**)LuaShared, (PVOID)hkCreateLuaInterfaceFn, 4);
-    oCloseLuaInterfaceFn = VMTHook<_CloseLuaInterfaceFn>((PVOID**)LuaShared, (PVOID)hkCloseInterfaceLuaFn, 5);
+        oRunStringEx = GuardedVMTHook< _RunStringEx>("RunStringEx", (PVOID**)Lua, (PVOID)hkRunStringEx, 111);
+    oCreateLuaInterfaceFn = GuardedVMTHook<_CreateLuaInterfaceFn>("CreateLuaInterface", (PVOID**)LuaShared, (PVOID)hkCreateLuaInterfaceFn, 4);
+    oCloseLuaInterfaceFn = GuardedVMTHook<_CloseLuaInterfaceFn>("CloseLuaInterface", (PVOID**)LuaShared, (PVOID)hkCloseInterfaceLuaFn, 5);
 
-    oCreateMove = VMTHook<_CreateMove>((PVOID**)ClientMode, (PVOID)hkCreateMove, 21);
-    oFrameStageNotify = VMTHook< _FrameStageNotify>((PVOID**)CHLclient, hkFrameStageNotify, 35);
-    oRenderView = VMTHook<_RenderView>((PVOID**)ViewRender, (PVOID)hkRenderView, 6);
-    oPaintTraverse = VMTHook< _PaintTraverse>((PVOID**)PanelWrapper, (PVOID)hkPaintTraverse, 41);
-    oDrawModelExecute = VMTHook< _DrawModelExecute>((PVOID**)ModelRender, (PVOID)hkDrawModelExecute, 20);
-    oProcessGMOD_ServerToClient = VMTHook< _ProcessGMOD_ServerToClient>((PVOID**)ClientState, (PVOID)hkProcessGMOD_ServerToClient, 64);
-    oRunCommand = VMTHook< _RunCommand>((PVOID**)Prediction, (PVOID)hkRunCommand, 19);
-    oPaint = VMTHook<_Paint>((PVOID**)EngineVGui, (PVOID)hkPaint, 13);
+    oCreateMove = GuardedVMTHook<_CreateMove>("CreateMove", (PVOID**)ClientMode, (PVOID)hkCreateMove, 21);
+    oFrameStageNotify = GuardedVMTHook< _FrameStageNotify>("FrameStageNotify", (PVOID**)CHLclient, hkFrameStageNotify, 35);
+    oRenderView = GuardedVMTHook<_RenderView>("RenderView", (PVOID**)ViewRender, (PVOID)hkRenderView, 6);
+    oPaintTraverse = GuardedVMTHook< _PaintTraverse>("PaintTraverse", (PVOID**)PanelWrapper, (PVOID)hkPaintTraverse, 41);
+    oDrawModelExecute = GuardedVMTHook< _DrawModelExecute>("DrawModelExecute", (PVOID**)ModelRender, (PVOID)hkDrawModelExecute, 20);
+    oProcessGMOD_ServerToClient = GuardedVMTHook< _ProcessGMOD_ServerToClient>("ProcessGMOD_ServerToClient", (PVOID**)ClientState, (PVOID)hkProcessGMOD_ServerToClient, 64);
+    oRunCommand = GuardedVMTHook< _RunCommand>("RunCommand", (PVOID**)Prediction, (PVOID)hkRunCommand, 19);
+    oPaint = GuardedVMTHook<_Paint>("Paint", (PVOID**)EngineVGui, (PVOID)hkPaint, 13);
 
     present = GetRealFromRelative((char*)findPattern(PresentModule, PresentPattern, "Present"), 0x2, 6, false);
 
@@ -145,8 +185,20 @@ void Main()
 
     //GlobalVars->maxClients
     //GlobalVars + 0x14 = 1 will let u do anything lua related
-    oPresent = *(_Present*)(present);
-    *(_Present**)(present) = (_Present*)hkPresent;
+    // `present` is the address of a function pointer inside gameoverlayrenderer,
+    // found by pattern scan. If the scan no longer matches after an update it is
+    // null/garbage; reading and overwriting it blindly would crash, so guard it
+    // the same way as the VMT hooks above.
+    if (present && MemIsReadable(present, sizeof(_Present)))
+    {
+        oPresent = *(_Present*)(present);
+        *(_Present**)(present) = (_Present*)hkPresent;
+        DBG_INFO("Hook 'Present' installed (slot %p)", (void*)present);
+    }
+    else
+    {
+        DBG_ERROR("Hook 'Present' skipped: scan slot %p unreadable (pattern stale after a game update?)", (void*)present);
+    }
 
     //EngineClient->ClientCmd_Unrestricted("play \"items/suitchargeok1.wav\"");
         //Sleep(2200);
