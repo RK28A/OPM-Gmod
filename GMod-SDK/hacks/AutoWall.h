@@ -37,7 +37,7 @@ float ScaleDamage(int hitGroup)
 // This is WIP, i'm releasing to UC before I finish making it.
 bool CanHit(C_BasePlayer* target, Vector from, Vector to)
 {
-	if (!localPlayer || !localPlayer->GetActiveWeapon())
+	if (!localPlayer || !localPlayer->GetActiveWeapon() || !EngineTrace)
 		return false; 
 	//C_BaseCombatWeapon* weapon = localPlayer->GetActiveWeapon();
 	//if (!weapon->UsesLua())

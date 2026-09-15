@@ -12,6 +12,10 @@ CMoveData moveData;
 void StartPrediction(CUserCmd* cmd)
 {
 	if (!Settings::Misc::edgeJump) return; // Temporarily making prediction "disabled" cause far from being perfect...
+	// predictionRandomSeed comes from a signature scan (null if it failed); the
+	// SDK interfaces are set at init but guarded here for the same reason.
+	if (!cmd || !localPlayer || !GlobalVars || !GameMovement || !Prediction || !Globals::predictionRandomSeed)
+		return;
 	*Globals::predictionRandomSeed = MD5_PseudoRandom(cmd->command_number) & 0x7FFFFFFF;
 	//*Globals::predictionRandomSeed = cmd->random_seed;
 
@@ -40,9 +44,13 @@ void EndPrediction(CUserCmd* cmd)
 {
 	if (!Settings::Misc::edgeJump) return; // Temporarily making prediction "disabled" cause far from being perfect...
 	//localPlayer->PostThink();
-	GlobalVars->curtime = m_flOldCurtime;
-	GlobalVars->frametime = m_flOldFrametime;
+	if (GlobalVars) {
+		GlobalVars->curtime = m_flOldCurtime;
+		GlobalVars->frametime = m_flOldFrametime;
+	}
 
-	GameMovement->FinishTrackPredictionErrors(localPlayer);
-	*Globals::predictionRandomSeed = -1;
+	if (GameMovement && localPlayer)
+		GameMovement->FinishTrackPredictionErrors(localPlayer);
+	if (Globals::predictionRandomSeed)
+		*Globals::predictionRandomSeed = -1;
 };
