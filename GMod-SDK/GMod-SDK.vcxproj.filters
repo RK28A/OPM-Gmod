@@ -134,6 +134,9 @@
     <ClInclude Include="hacks\AdminEsp.h">
       <Filter>Header Files\hacks</Filter>
     </ClInclude>
+    <ClInclude Include="hacks\Debug.h">
+      <Filter>Header Files\hacks</Filter>
+    </ClInclude>
     <ClInclude Include="hacks\AntiAim.h">
       <Filter>Header Files\hacks</Filter>
     </ClInclude>
