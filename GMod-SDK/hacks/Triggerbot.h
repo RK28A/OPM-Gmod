@@ -4,39 +4,81 @@
 #include "Utils.h"
 #include "AutoWall.h"
 
-// That's bad, honestly needs a little improve
+// Runs from hkCreateMove (main thread). Traces a ray from the eye along the
+// current command's view angles; if it lands on a live enemy player on an
+// enabled hitgroup, it presses attack for this command. It never touches Lua
+// and never removes entities, so it cannot raise the engine's
+// "!ThreadInMainThread" / "EntityRemoved" Lua errors.
 void TriggerBot(CUserCmd* cmd)
 {
-	if (!Settings::Triggerbot::triggerBot)return;
-	QAngle viewAng;
-	viewAng.z = 0;
-	EngineClient->GetViewAngles(viewAng);
-	trace_t Trace;
-	CTraceFilter filter;
-	filter.pSkip = localPlayer;
-	Ray_t Ray;
+    if (!cmd || !Settings::Triggerbot::triggerBot || !localPlayer || !EngineTrace)
+        return;
 
-	Ray.Init(localPlayer->EyePosition(), localPlayer->EyePosition() + cmd->viewangles.toVector() * 69696.f);
-	EngineTrace->TraceRay(Ray, MASK_SHOT, &filter, &Trace);
+    if (!localPlayer->IsAlive())
+        return;
 
-	C_BasePlayer* target = (C_BasePlayer*)Trace.m_pEnt;
-	if (!target || !target->IsPlayer() || !target->IsAlive())
-		return;
+    const Vector start = localPlayer->EyePosition();
+    const Vector end = start + cmd->viewangles.toVector() * 8192.0f;
 
-	if (!Settings::Aimbot::aimAtTeammates && target->InLocalTeam())
-		return;
-	
-	if ((Settings::Triggerbot::triggerBotHead && Trace.hitgroup == HITGROUP_HEAD) || (Settings::Triggerbot::triggerBotChest && Trace.hitgroup == HITGROUP_CHEST) || (Settings::Triggerbot::triggerBotStomach && Trace.hitgroup == HITGROUP_STOMACH))
-	{
-		static bool toggle = false;
-		toggle = !toggle;
+    Ray_t ray;
+    ray.Init(start, end);
 
-		if (Settings::Triggerbot::triggerbotFastShoot)
-		{
-			if(toggle || Settings::Triggerbot::triggerbotFastShoot)
-			cmd->buttons |= IN_ATTACK;
-			else cmd->buttons &= ~IN_ATTACK;
-		}
-		else cmd->buttons |= IN_ATTACK;
-	}
+    CTraceFilter filter;
+    filter.pSkip = localPlayer;
+
+    trace_t trace{};
+    EngineTrace->TraceRay(ray, MASK_SHOT, &filter, &trace);
+
+    auto* target = static_cast<C_BasePlayer*>(trace.m_pEnt);
+
+    if (!target ||
+        target == localPlayer ||
+        !target->IsPlayer() ||
+        !target->IsAlive())
+    {
+        return;
+    }
+
+    if (!Settings::Aimbot::aimAtTeammates && target->InLocalTeam())
+        return;
+
+    bool validHitgroup = false;
+
+    switch (trace.hitgroup)
+    {
+    case HITGROUP_HEAD:
+        validHitgroup = Settings::Triggerbot::triggerBotHead;
+        break;
+
+    case HITGROUP_CHEST:
+        validHitgroup = Settings::Triggerbot::triggerBotChest;
+        break;
+
+    case HITGROUP_STOMACH:
+        validHitgroup = Settings::Triggerbot::triggerBotStomach;
+        break;
+
+    default:
+        break;
+    }
+
+    if (!validHitgroup)
+        return;
+
+    // Fast-shoot alternates attack every other command so semi-automatic
+    // weapons actually re-fire instead of the button staying held down.
+    if (Settings::Triggerbot::triggerbotFastShoot)
+    {
+        static bool shootThisTick = false;
+        shootThisTick = !shootThisTick;
+
+        if (shootThisTick)
+            cmd->buttons |= IN_ATTACK;
+        else
+            cmd->buttons &= ~IN_ATTACK;
+
+        return;
+    }
+
+    cmd->buttons |= IN_ATTACK;
 }
