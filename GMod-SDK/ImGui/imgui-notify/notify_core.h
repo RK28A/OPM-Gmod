@@ -217,6 +217,14 @@ namespace notify
 
 		va_list measure;
 		va_copy(measure, args);
+		// FormatV is a vsnprintf wrapper, so the format is legitimately non-literal
+		// here; clang's -Wformat-nonliteral (an error under the test build's
+		// -Werror) is a false positive for this deliberate forwarding. Suppress it
+		// locally for GCC/Clang -- MSVC never sees the pragma.
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 		const int needed = std::vsnprintf(nullptr, 0, format, measure);
 		va_end(measure);
 
@@ -227,6 +235,9 @@ namespace notify
 		std::string out(length, '\0');
 		if (length > 0)
 			std::vsnprintf(&out[0], length + 1, format, args);
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 		if (out.size() > kMaxMessageLength)
 		{
