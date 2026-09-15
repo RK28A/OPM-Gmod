@@ -1,85 +1,94 @@
 # OPM-Gmod
 
-A hardened fork of [GMod-SDK](https://github.com/Gaztoof/GMod-SDK) at the head
-of [PR #64](https://github.com/Gaztoof/GMod-SDK/pull/64), carrying the fixes
-from that pull request's code review.
+> **⚠️ Projet à but strictement éducatif.**
+> Ce dépôt existe pour l'étude du *reverse engineering*, des internals du moteur
+> **Source**, du *hooking* et de la création d'interfaces **ImGui** en C++.
+> Il n'est **pas** destiné à tricher sur des serveurs en ligne : cela enfreint
+> les conditions d'utilisation de Garry's Mod et de Steam. À n'utiliser que sur
+> votre propre installation, à vos risques.
 
-**Start with [REVIEW.md](REVIEW.md)** — it maps the review's 200 findings to
-what was changed, what was decided differently, and what is deliberately still
-open (including a Font Awesome licensing problem and the manual runtime pass
-that still has to be done in-game).
+## À propos
 
-Build status and the host-side test suite:
+**OPM-Gmod** est un fork durci de
+[GMod-SDK](https://github.com/Gaztoof/GMod-SDK), un module interne pour
+[Garry's Mod](https://store.steampowered.com/app/4000/Garrys_Mod/) construit à
+partir d'interfaces obtenues en *reversant* le jeu.
 
-```
-cd tests && make test   # 24 cases, no Windows or DirectX needed
-make asan               # the same suite under ASan + UBSan
-```
+L'objectif ici est avant tout pédagogique : servir de support pour comprendre
+comment
 
-CI builds Debug and Release for Win32 and x64, runs the tests on gcc and clang
-with warnings as errors, and runs clang-tidy. See `.github/workflows/ci.yml`.
+- retrouver et appeler les interfaces du moteur Source (tier0/tier1, engine,
+  vgui, mathlib…) ;
+- poser des *hooks* sur les fonctions clés du client (`CreateMove`,
+  `FrameStageNotify`, `Paint`, `RenderView`…) ;
+- construire un *overlay* avec ImGui sur un backend DirectX 9 ;
+- écrire du C++ défensif (validation des entrées, sécurité mémoire, RAII)
+  au-dessus d'une base issue du reverse engineering.
 
-Upstream's own README follows.
+Par rapport à la base d'origine, ce fork ajoute une passe de durcissement
+(sécurité mémoire, chaînes de format, validation d'état, propriété des
+ressources), une suite de tests hôte et de l'intégration continue. Le détail
+des changements est consigné dans **[REVIEW.md](REVIEW.md)**.
 
----
+## Contenu
 
-# GMod-SDK
+- SDK d'interfaces Source *reversées* (x86 et x64).
+- *Hooks* du client et de l'overlay de rendu.
+- Interface ImGui in-game (s'ouvre avec la touche **INSER / INSERT**).
+- Système de notifications *toast* portable et testé
+  (`GMod-SDK/ImGui/imgui-notify/`).
+- Helpers mathématiques d'angles portables et testés (`GMod-SDK/mathlib/`).
+- Tests hôte (gcc / clang) et CI (MSBuild Win32/x64, ASan/UBSan, clang-tidy).
 
-
-This is a module for [Garry's Mod](https://store.steampowered.com/app/4000/Garrys_Mod/) that works based on a SDK.
-
-I've spent the past few days reversing a few modules of the game, in order to get as many interfaces as I could that would be useful to make any type of internal module for [Garry's Mod](https://store.steampowered.com/app/4000/Garrys_Mod/).
-
-Note that this is still WIP!
-
-This works in both x86, and x64.
-
-I've uploaded every idb / dylib i've made while reversing the game, except x64 client.dll as it takes too much space for github.
-
-The gui is an almost-perfect gamesense clone.
-
-This also comes in with a built-in lua executor.
+## Aperçu
 
 ![](https://i.imgur.com/TecyXLF.png)
 ![](https://i.imgur.com/So6vWVn.png)
 ![](https://i.imgur.com/85YRzrO.png)
-![](https://i.imgur.com/SouXE7G.png)
-![](https://i.imgur.com/fBRleQL.png)
 
-## Usage
+## Compilation
 
-Compile as x86/x64 Release. Debug works too.
+Ouvrez `GMod-SDK.sln` dans Visual Studio et compilez en **Release x86** ou
+**Release x64** (Debug fonctionne aussi). La build a besoin du DirectX SDK de
+juin 2010 (D3DX9) ; la méthode utilisée en CI (paquet NuGet
+`Microsoft.DXSDK.D3DX`) est décrite dans `.github/workflows/ci.yml`.
 
-Get yourself an injector, select Garry's Mod, and inject the compiled .DLL into the target process.
+Pour charger le module : injectez la `.dll` compilée dans le processus de
+Garry's Mod avec l'injecteur de votre choix, puis appuyez sur **INSER** pour
+ouvrir le menu.
 
-If you did this right, the cheat should loaded.
+### Tests portables (ni Windows ni DirectX requis)
 
-Press INSERT to open the menu.
+Les parties indépendantes de la plateforme (notifications, maths d'angles) se
+testent sur n'importe quelle toolchain :
 
-## How to update
+```
+cd tests && make test   # 24 cas, sans Windows ni DirectX
+make asan               # la même suite sous ASan + UBSan
+```
 
-In case I stop working on this project, and you want to update it, feel free to fork this project.
+## Structure
 
-Get the .dylibs using the game's macOs build [SteamDepotDownloader](https://github.com/SteamRE/DepotDownloader/), and make sure they're up-to-date when you compare them to the Windows build's interfaces.
+| Dossier | Rôle |
+| --- | --- |
+| `GMod-SDK/tier0`, `tier1`, `mathlib`, `engine`, `vgui`, `client` | Interfaces et types du moteur Source (reversés) |
+| `GMod-SDK/hooks` | Hooks du client et du rendu |
+| `GMod-SDK/hacks` | Fonctionnalités et menu |
+| `GMod-SDK/ImGui` | ImGui, backend DX9/Win32 et notifications |
+| `tests` | Tests hôte des composants portables |
 
-Null functions can sometime be a pain, make sure they're not phasing out your entire interfaces. A single null function will stop everything from working.
+## Licence
 
-## Contact
+Distribué sous licence **MIT** — voir [LICENSE](LICENSE).
+Copyright (c) 2021 Gaztoof.
 
-You can contact me on [Telegram](https://t.me/Gaztoof), at t.me/@Gaztoof
+## Remerciements
 
-[This](https://www.youtube.com/channel/UCB7rQNzTsaoS2-I0Z4byUxA) is my YouTube channel.
+Merci à **[Gaztoof](https://github.com/Gaztoof/GMod-SDK)** pour le projet de
+base, dont ce dépôt est un fork.
 
-## Made with
+Autres briques utilisées :
 
-* [IDA Pro](http://www.dropwizard.io/1.0.2/docs/) - The software I used to reverse the game.
-* [VMT Dumper](https://pastebin.com/eVHDkHZX) - The IDA script I used for dumping the VTables. I've found it on a forum and modified it.
-* [IMGui](https://github.com/ocornut/imgui) - The GUI is just modified pure ImGui.
-
-## Contributing
-
-1. Fork the project (<https://github.com/Gaztoof/GMod-SDK>)
-2. Create your feature branch (`git checkout -b feature/fooBar`)
-3. Commit your changes (`git commit -am 'Add some fooBar'`)
-4. Push to the branch (`git push origin feature/fooBar`)
-5. Create a new Pull Request
+- [Dear ImGui](https://github.com/ocornut/imgui) — base de l'interface.
+</content>
+</invoke>
