@@ -51,8 +51,11 @@ bool __fastcall hkCreateMove(ClientModeShared* ClientMode,
 			else inCombat = (cmd->buttons & IN_ATTACK);
 
 			if (Settings::AntiAim::enableAntiAim && !inCombat) {
-				bool antiAimKeyDown;
-				getKeyState(Settings::AntiAim::antiAimKey, Settings::AntiAim::antiAimKeyStyle, &antiAimKeyDown, henlo1, henlo2, henlo3);
+				// Was `bool antiAimKeyDown;` -- uninitialised, and the macro
+				// had no default case, so an out-of-range style from a config
+				// file left it holding whatever was on the stack.
+				const bool antiAimKeyDown = PollKey(Settings::AntiAim::antiAimKey,
+					Settings::AntiAim::antiAimKeyStyle, Settings::AntiAim::antiAimKeyState);
 				if (antiAimKeyDown)
 				{
 					AntiAimPitch(cmd, Settings::AntiAim::currentAntiAimPitch);
@@ -86,8 +89,8 @@ bool __fastcall hkCreateMove(ClientModeShared* ClientMode,
 	if (Settings::Misc::fakeLag && Globals::bSendpacket)
 	{
 		static int m_nChokedPackets = 0;
-		bool fakeLagKeyDown = false;
-		getKeyState(Settings::Misc::fakeLagKey, Settings::Misc::fakeLagKeyStyle, &fakeLagKeyDown, henlo1, henlo2, henlo3);
+		const bool fakeLagKeyDown = PollKey(Settings::Misc::fakeLagKey,
+			Settings::Misc::fakeLagKeyStyle, Settings::Misc::fakeLagKeyState);
 		if (fakeLagKeyDown)
 			if (m_nChokedPackets < (int)Settings::Misc::fakeLagTicks)
 			{

@@ -37,6 +37,7 @@
 #include "client/IPrediction.h"
 #include "client/IGameMovement.h"
 #include "hacks/ConVarSpoofing.h"
+#include "core/KeyState.h"
 
 #include <cmath>
 #include <math.h>
@@ -291,6 +292,12 @@ namespace Settings {
 		bool enableAntiAim;
 		ButtonCode_t antiAimKey = KEY_NONE;
 		int antiAimKeyStyle = 1; // KEY_NONE;
+
+		// Toggle latch for the binding above.  One per *feature*: see PollKey()
+		// in hacks/Utils.h for why the getKeyState macro's per-expansion
+		// statics were a bug rather than an implementation detail.
+		input::KeyState antiAimKeyState;
+
 		float fakePitch;
 	}
 	namespace Aimbot {
@@ -299,6 +306,7 @@ namespace Settings {
 		bool lockOnTarget = false;
 		ButtonCode_t aimbotKey = KEY_NONE;
 		int aimbotKeyStyle = 1;
+		input::KeyState aimbotKeyState;
 		bool enableAimbot = false;
 		int aimbotHitbox = 0;
 		bool aimbotAutoWall = false;
@@ -368,6 +376,14 @@ namespace Settings {
 		bool thirdperson;
 		ButtonCode_t thirdpersonKey = KEY_NONE;
 		int thirdpersonKeyStyle = 1;
+
+		// Read from two hooks -- FrameStageNotify (whether to rewrite the local
+		// view angles) and RenderView (whether to move the camera).  They have
+		// to share one latch or, in toggle mode, they answer differently on the
+		// same frame and the feature half-applies.  The getKeyState macro gave
+		// each call site its own statics, which is exactly that bug.
+		input::KeyState thirdpersonKeyState;
+
 		float thirdpersonDistance;
 
 		bool removeHands;
@@ -381,6 +397,10 @@ namespace Settings {
 		bool freeCam;
 		ButtonCode_t freeCamKey = KEY_NONE;
 		int freeCamKeyStyle = 1;
+
+		// Shared for the same reason as thirdpersonKeyState above.
+		input::KeyState freeCamKeyState;
+
 		float freeCamSpeed;
 
 		bool hitmarkerSoundEnabled = false;
@@ -397,10 +417,12 @@ namespace Settings {
 		float fakeLagTicks;
 		ButtonCode_t fakeLagKey = KEY_NONE;
 		int fakeLagKeyStyle = 1;
+		input::KeyState fakeLagKeyState;
 
 		bool zoom;
 		ButtonCode_t zoomKey = KEY_NONE;
 		int zoomKeyStyle = 1;
+		input::KeyState zoomKeyState;
 		float zoomFOV = 90.f;
 
 		bool svCheats;

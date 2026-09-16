@@ -108,10 +108,14 @@ ClientFrameStage_t stage)
 			}
 		}
 	}
-	bool thirdpKeyDown = false;
-	getKeyState(Settings::Misc::thirdpersonKey, Settings::Misc::thirdpersonKeyStyle, &thirdpKeyDown);
-	bool freecamKeyDown = false;
-	getKeyState(Settings::Misc::freeCamKey, Settings::Misc::freeCamKeyStyle, &freecamKeyDown);
+	// Shares Settings::Misc::thirdpersonKeyState / freeCamKeyState with
+	// RenderView.h.  Under the old macro each of the two hooks kept its own
+	// toggle latch, so in toggle mode this hook and the camera hook could
+	// disagree about whether the feature was on.
+	const bool thirdpKeyDown = PollKey(Settings::Misc::thirdpersonKey,
+		Settings::Misc::thirdpersonKeyStyle, Settings::Misc::thirdpersonKeyState);
+	const bool freecamKeyDown = PollKey(Settings::Misc::freeCamKey,
+		Settings::Misc::freeCamKeyStyle, Settings::Misc::freeCamKeyState);
 
 	bool needsSetViewAngles = (Settings::Misc::thirdperson && thirdpKeyDown) || (Settings::Misc::freeCam && freecamKeyDown);
 
