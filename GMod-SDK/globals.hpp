@@ -168,7 +168,12 @@ namespace Globals {
 	VPanel* lastPanelIdentifier;
 
 	std::atomic<vmatrix_t> viewMatr;
-	std::atomic<std::pair<bool, LPCSTR>> waitingToBeExecuted;
+
+	// waitingToBeExecuted used to live here as
+	// std::atomic<std::pair<bool, LPCSTR>>: atomic in the pointer only, while
+	// the string it pointed at was the ImGui editor buffer that another thread
+	// was writing.  The hand-off is by value under a mutex now, in
+	// hacks/Executor.h.
 	int executeState = 0;
 
 	int screenWidth, screenHeight;
