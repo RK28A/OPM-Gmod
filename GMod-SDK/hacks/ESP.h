@@ -57,7 +57,7 @@ void doEsp()
 			if (isEntity)
 			{
 
-				DrawTextW(Vector(screenTopPos.x, screenTopPos.y, 0), StringToWString(entName), ColorToRGBA(Settings::ESP::espNameColor), true);
+				DrawString(Vector(screenTopPos.x, screenTopPos.y, 0), StringToWString(entName), ColorToRGBA(Settings::ESP::espNameColor), true);
 
 				// let's make entities 3d only... cuz it looks better so yeah
 				/*if (Settings::ESP::espShapeInt == 0)
@@ -109,7 +109,7 @@ void doEsp()
 						if (!WorldToScreen(normalBonePos, bonePosFrom) || !WorldToScreen(normalParentBonePos, parentBonePos))
 							continue;
 						DrawLine(bonePosFrom, parentBonePos, ColorToRGBA(Settings::ESP::skeletonEspColor));
-						//DrawTextW(bonePosFrom, std::to_wstring(z), 0xFFFFFFFF, true); // write bone ids
+						//DrawString(bonePosFrom, std::to_wstring(z), 0xFFFFFFFF, true); // write bone ids
 					}
 				}
 
@@ -171,7 +171,7 @@ void doEsp()
 					textPos = Vector(targetScrMaxs.x - (targetScrMaxs.y - targetScrMins.y) / 4, targetScrMaxs.y, 0);
 					break;
 				}
-				DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espNameColor), true);
+				DrawString(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espNameColor), true);
 
 				if (Settings::ESP::weaponText)
 				{
@@ -180,28 +180,28 @@ void doEsp()
 					{
 						playerInfo = L"Weapon: " + StringToWString(entity->GetActiveWeapon()->GetName());
 						textPos.y += DrawingFontSize;
-						DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espWeaponColor), true);
+						DrawString(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espWeaponColor), true);
 					}
 				}
 				if (Settings::ESP::espHealthBar)
 				{
 					playerInfo = L"Health: " + std::to_wstring(entity->GetHealth()) + L"/" + std::to_wstring(entity->GetMaxHealth());
 					textPos.y += DrawingFontSize;
-					DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espHealthColor), true);
+					DrawString(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espHealthColor), true);
 				}
 
 				if (Settings::ESP::weaponAmmo)
 				{
 					playerInfo = L"Ammos: " + std::to_wstring(entity->GetActiveWeapon()->PrimaryAmmoCount());
 					textPos.y += DrawingFontSize;
-					DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espAmmoColor), true);
+					DrawString(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espAmmoColor), true);
 				}
 
 				if (Settings::ESP::espDistance)
 				{
 					playerInfo = L"Distance: " + std::to_wstring((int)entity->GetAbsOrigin().DistTo(localPlayer->GetAbsOrigin()));
 					textPos.y += DrawingFontSize;
-					DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espDistanceColor), true);
+					DrawString(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espDistanceColor), true);
 				}
 
 

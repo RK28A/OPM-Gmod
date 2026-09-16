@@ -23,16 +23,21 @@ ClientFrameStage_t stage)
 		else fullbrightCvar->AddFlags(FCVAR_CHEAT);
 		fullbrightCvar->SetValue(Settings::Visuals::fullBright);
 	}
-	if (Settings::Misc::svAllowCsLua && !spoofedAllowCsLua) {
-		spoofedAllowCsLua = new SpoofedConVar(CVar->FindVar("sv_allowcslua"));
-		spoofedAllowCsLua->m_pOriginalCVar->DisableCallback();
-	}if (Settings::Misc::svCheats && !spoofedCheats) {
-		spoofedCheats = new SpoofedConVar(CVar->FindVar("sv_cheats"));
-		spoofedCheats->m_pOriginalCVar->DisableCallback();
-	}
+	// Acquire() is idempotent and owns the instance, so this no longer leaks a
+	// raw `new` into a global that nothing frees.  It also copes with FindVar()
+	// returning null, which used to build a SpoofedConVar around nullptr and
+	// then dereference it on the very next line.
+	if (Settings::Misc::svAllowCsLua)
+		ConVarSpoofing::Acquire(ConVarSpoofing::allowCsLua, "sv_allowcslua");
 
-	if (spoofedAllowCsLua && spoofedAllowCsLua->m_pOriginalCVar->intValue != Settings::Misc::svAllowCsLua) spoofedAllowCsLua->m_pOriginalCVar->SetValue(Settings::Misc::svAllowCsLua);
-	if (spoofedCheats && spoofedCheats->m_pOriginalCVar->intValue != Settings::Misc::svCheats) spoofedCheats->m_pOriginalCVar->SetValue(Settings::Misc::svCheats);
+	if (Settings::Misc::svCheats)
+		ConVarSpoofing::Acquire(ConVarSpoofing::cheats, "sv_cheats");
+
+	if (ConVarSpoofing::allowCsLua && ConVarSpoofing::allowCsLua->m_pOriginalCVar->intValue != Settings::Misc::svAllowCsLua)
+		ConVarSpoofing::allowCsLua->m_pOriginalCVar->SetValue(Settings::Misc::svAllowCsLua);
+
+	if (ConVarSpoofing::cheats && ConVarSpoofing::cheats->m_pOriginalCVar->intValue != Settings::Misc::svCheats)
+		ConVarSpoofing::cheats->m_pOriginalCVar->SetValue(Settings::Misc::svCheats);
 
 	//Input->cameraoffset
 

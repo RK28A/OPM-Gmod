@@ -131,8 +131,9 @@ void ConPrint(const char* text, Color col)
 }
 
 
-SpoofedConVar* spoofedAllowCsLua;
-SpoofedConVar* spoofedCheats;
+// The two spoofed cvars used to be raw globals here, `new`-ed from
+// FrameStageNotify and never deleted.  They are owned by
+// ConVarSpoofing::allowCsLua / ::cheats now (see hacks/ConVarSpoofing.h).
 
 struct chamsSetting {
 	Color hiddenColor = Color(255, 255, 255, 255);
@@ -166,9 +167,6 @@ namespace Globals {
 	bool choke;
 	VPanel* lastPanelIdentifier;
 
-	SpoofedConVar* spoofedAllowCsLua;
-	SpoofedConVar* spoofedCheats;
-
 	std::atomic<vmatrix_t> viewMatr;
 	std::atomic<std::pair<bool, LPCSTR>> waitingToBeExecuted;
 	int executeState = 0;
@@ -181,6 +179,15 @@ namespace Globals {
 
 	HWND window;
 	WNDPROC oWndProc;
+
+	// Set by the menu's Unload button, acted on at the *end* of the Present
+	// hook.  The button used to tear everything down in place, from inside the
+	// frame it was drawn in: menuBg had already been handed to ImGui::Image()
+	// and was still referenced by the draw list that ImGui_ImplDX9_RenderDrawData
+	// consumes at the end of that same frame, so releasing it there was a
+	// use-after-free on the texture.  Deferring the teardown past RenderDrawData
+	// means nothing can still be pointing at what is being released.
+	std::atomic<bool> pendingUnload{ false };
 }
 namespace Settings {
 	ButtonCode_t menuKey = KEY_INSERT;
