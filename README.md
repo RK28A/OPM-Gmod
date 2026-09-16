@@ -12,9 +12,13 @@ that still has to be done in-game).
 Build status and the host-side test suite:
 
 ```
-cd tests && make test   # 24 cases, no Windows or DirectX needed
+cd tests && make test   # 67 cases, no Windows or DirectX needed
 make asan               # the same suite under ASan + UBSan
 ```
+
+The logic worth testing lives in `GMod-SDK/core/` — deliberately free of
+Windows, DirectX and SDK dependencies so it can be compiled, sanitised and run
+anywhere. Moving more of the module in there is how coverage grows.
 
 CI builds Debug and Release for Win32 and x64, runs the tests on gcc and clang
 with warnings as errors, and runs clang-tidy. See `.github/workflows/ci.yml`.
