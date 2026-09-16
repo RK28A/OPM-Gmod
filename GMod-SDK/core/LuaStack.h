@@ -42,6 +42,20 @@ namespace lua
 				depth_ += count;
 		}
 
+		// Record values Lua removed on its own, without popping anything here.
+		//
+		// Call(nargs, nresults) takes the function and its arguments off the
+		// stack before pushing the results, so the guard must forget them or it
+		// would pop that many values a second time on the way out -- eating
+		// whatever the enclosing scope had underneath.
+		void Consumed(int count) noexcept
+		{
+			if (count <= 0)
+				return;
+
+			depth_ -= (count > depth_) ? depth_ : count;
+		}
+
 		// Pop early, for the paths that need the stack unwound before they do
 		// something else.  Never pops more than was recorded, so an over-count
 		// here cannot eat a value that belongs to an enclosing scope.
