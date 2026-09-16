@@ -7,9 +7,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  # The module itself is MSVC/DirectX only, but notify_core.h and AngleMath.h
-  # are deliberately free of those dependencies, so their logic is compiled with
-  # warnings-as-errors, run, and then run again under ASan + UBSan.
+  # The module itself is MSVC/DirectX only, but the headers under GMod-SDK/core/,
+  # plus notify_core.h and AngleMath.h, are deliberately free of those
+  # dependencies, so their logic is compiled with warnings-as-errors, run, and
+  # then run again under ASan + UBSan.
   unit-tests:
     name: Unit tests (${{ matrix.cc.name }})
     runs-on: ubuntu-latest
@@ -42,7 +43,8 @@ jobs:
       - name: Analyse the portable headers through the test sources
         working-directory: tests
         run: |
-          clang-tidy notify_tests.cpp anglemath_tests.cpp main.cpp \
+          clang-tidy notify_tests.cpp anglemath_tests.cpp keystate_tests.cpp \
+            pathsanitize_tests.cpp stringutil_tests.cpp luastack_tests.cpp main.cpp \
             -- -std=c++17 -I.
 
   # Real build of the module, matching what the README tells contributors to do
