@@ -2,6 +2,11 @@
 
 #include "../globals.hpp"
 #include "../client/usercmd.h"
+
+// PollKey lives here.  This header used to rely on dllmain.cpp including
+// CreateMove.h (and through it Utils.h) first -- the single-translation-unit
+// build hides a missing include until the day the order changes.
+#include "../hacks/Utils.h"
 #include <Windows.h>
 
 typedef void(__thiscall* _FrameStageNotify)(CHLClient*, ClientFrameStage_t);
