@@ -700,37 +700,18 @@ namespace GUI
 				Menu::InsertButtonMiddle("Unload", unloadPressed);
 				if (unloadPressed)
 				{
-					SetWindowLongPtrA(Globals::window, GWLP_WNDPROC, (LONG_PTR)Globals::oWndProc);
-
-					// Unregisters and destroys both listeners.  The C casts were
-					// only needed because the listeners inherited privately;
-					// they are `public IGameEventListener2` now.
-					GameEvents::Unregister();
-
-					if (spoofedAllowCsLua)
-						spoofedAllowCsLua->~SpoofedConVar();
-					if (spoofedCheats)
-						spoofedCheats->~SpoofedConVar();
-
-					RestoreVMTHooks();
-					if (Globals::bSendpacket)
-						*Globals::bSendpacket = true;
-					
-#ifdef _WIN64
-					* (char**)(present) = (char*)(oPresent);
-#else
-					** (char***)(present) = (char*)oPresent;
-#endif
-					InputSystem->EnableInput(true);
-					PanelWrapper->SetKeyBoardInputEnabled(Globals::lastPanelIdentifier, false);
-					PanelWrapper->SetMouseInputEnabled(Globals::lastPanelIdentifier, false);
-
+					// Request only.  The teardown itself runs in PerformUnload()
+					// at the end of the Present hook, once ImGui's draw list has
+					// been consumed.
+					//
+					// Doing it here, as this used to, released menuBg while it
+					// was still referenced by the draw list that
+					// ImGui_ImplDX9_RenderDrawData renders at the end of this
+					// very frame -- a use-after-free on the texture -- and left
+					// the D3DX font and line objects, the ImGui context and the
+					// Win32 backend alive for good.
+					Globals::pendingUnload = true;
 					Globals::openMenu = false;
-
-#if _DEBUG
-					FreeConsole();
-#endif
-					ConPrint("Successfully unloaded!", Color(0, 255, 0));
 				}
 				style->ItemSpacing = ImVec2(0, 0);
 				style->WindowPadding = ImVec2(6, 6);
