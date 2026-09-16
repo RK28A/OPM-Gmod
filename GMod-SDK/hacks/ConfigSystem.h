@@ -2,6 +2,8 @@
 
 #include "../globals.hpp"
 #include <fstream>
+#include <filesystem>
+#include <system_error>
 #include "../json.h"
 #include <iomanip>
 #pragma comment( user, "Compiled on " __DATE__ " at " __TIME__ )
@@ -9,6 +11,12 @@
 using nlohmann::json;
 namespace ConfigSystem
 {
+	// A config file is external input.  Every read below used to be `j["key"]`,
+	// which throws nlohmann::json::type_error or out_of_range the moment a key
+	// is missing or holds the wrong type -- and the whole load was wrapped in
+	// one catch-all that responded by overwriting the file and reloading it, so
+	// a single bad key discarded every setting in it.  `.value(key, default)`
+	// reads what is there and falls back per field instead.
 	json to_jsonfcol(const Color color) {
 		json j;
 		j["r"] = color.fCol[0];
@@ -18,12 +26,17 @@ namespace ConfigSystem
 		j["c"] = color.rainbow;
 		return j;
 	}
-	Color from_jsonfcol(const json j, Color& color) {
-		color.fCol[0] = j["r"];
-		color.fCol[1] = j["g"];
-		color.fCol[2] = j["b"];
-		color.fCol[3] = j["a"];
-		color.rainbow = j["c"];
+	Color from_jsonfcol(const json& j, Color& color) {
+		// Taken by const reference: it was by value, so every colour in the file
+		// was deep-copied once per load.
+		if (!j.is_object())
+			return color;
+
+		color.fCol[0] = j.value("r", color.fCol[0]);
+		color.fCol[1] = j.value("g", color.fCol[1]);
+		color.fCol[2] = j.value("b", color.fCol[2]);
+		color.fCol[3] = j.value("a", color.fCol[3]);
+		color.rainbow = j.value("c", color.rainbow);
 		return color;
 	}
 
@@ -37,10 +50,16 @@ namespace ConfigSystem
 	}
 	chamsSetting from_jsonchams(const json& j) {
 		chamsSetting setting(Color(255, 255, 255), Color(255, 255, 255), 0, 0);
-		from_jsonfcol(j["hiddenColor"], setting.hiddenColor);
-		from_jsonfcol(j["visibleColor"], setting.visibleColor);
-		setting.hiddenMaterial = j["hiddenMaterial"];
-		setting.visibleMaterial = j["visibleMaterial"];
+		if (!j.is_object())
+			return setting;
+
+		if (j.contains("hiddenColor"))
+			from_jsonfcol(j["hiddenColor"], setting.hiddenColor);
+		if (j.contains("visibleColor"))
+			from_jsonfcol(j["visibleColor"], setting.visibleColor);
+
+		setting.hiddenMaterial = j.value("hiddenMaterial", setting.hiddenMaterial);
+		setting.visibleMaterial = j.value("visibleMaterial", setting.visibleMaterial);
 		return setting;
 	}
 	enum configHandle {
@@ -48,21 +67,35 @@ namespace ConfigSystem
 		Load,
 		Reset
 	};
+	// Not constexpr any more: it never could be -- it does I/O-shaped work on a
+	// json object -- and C++17 does not allow a try block in a constexpr
+	// function.  The redundant (T*) casts on a pointer that is already T* are
+	// gone too.
 	template <class T>
-	constexpr T HandleConfigItem(json& j, configHandle handle, T* setting, T defaultValue)
+	T HandleConfigItem(json& j, configHandle handle, T* setting, T defaultValue)
 	{
 		switch (handle)
 		{
 		case configHandle::Save:
-			j = *(T*)setting;
+			j = *setting;
 			break;
+
 		case configHandle::Load:
-			*(T*)setting = j;
+			// Per field, so one corrupt or missing key costs that key alone
+			// rather than the entire file.
+			try
+			{
+				*setting = j.is_null() ? defaultValue : j.get<T>();
+			}
+			catch (const json::exception&)
+			{
+				*setting = defaultValue;
+			}
 			break;
+
 		case configHandle::Reset:
 			*setting = defaultValue;
 			break;
-
 		}
 		return *setting;
 	}
@@ -135,18 +168,84 @@ namespace ConfigSystem
 			Settings::Misc::freeCamSpeed = 1.f;
 	}
 
+	// Where configs live.
+	//
+	// Was hard-coded to the root of the system drive ("C:\GMOD-SDK-Settings"),
+	// which simply fails on a machine where that is not writable -- and
+	// CreateDirectory's result was discarded, so the failure was silent and the
+	// subsequent open failed for reasons nothing reported.  New saves go under
+	// %LOCALAPPDATA%; the old location is still *read* so existing configs keep
+	// loading.
+	[[nodiscard]] inline std::filesystem::path SettingsDirectory()
+	{
+		char buffer[MAX_PATH] = {};
+		const DWORD length = GetEnvironmentVariableA("LOCALAPPDATA", buffer, sizeof(buffer));
+
+		if (length > 0 && length < sizeof(buffer))
+			return std::filesystem::path(buffer) / "GMod-SDK" / "Settings";
+
+		return std::filesystem::path("C:\\GMOD-SDK-Settings");
+	}
+
+	[[nodiscard]] inline std::filesystem::path LegacySettingsDirectory()
+	{
+		return std::filesystem::path("C:\\GMOD-SDK-Settings");
+	}
+
+	// Depth guard for the "file is missing, write defaults and read them back"
+	// path below.  It used to recurse unconditionally: if the save could not be
+	// written -- an unwritable directory being exactly the case that gets you
+	// there -- Load called Save called Load for as long as the stack held.
+	inline int handleConfigDepth = 0;
+
+	struct DepthGuard
+	{
+		DepthGuard() { ++handleConfigDepth; }
+		~DepthGuard() { --handleConfigDepth; }
+	};
+
 	void _HandleConfig(const char* configName, configHandle handle)
 	{
-		CreateDirectory(L"C:\\GMOD-SDK-Settings", NULL);
+		const DepthGuard depthGuard;
+
+		const std::filesystem::path directory = SettingsDirectory();
+
+		std::error_code ec;
+		std::filesystem::create_directories(directory, ec);
+
 		json j;
 		if (handle == configHandle::Load)
 		{
-			std::ifstream i((std::string("C:\\GMOD-SDK-Settings\\") + configName));
-			if (!i.good()) {
+			std::filesystem::path file = directory / configName;
+
+			// Fall back to the pre-%LOCALAPPDATA% location so an existing
+			// config is not silently replaced by defaults.
+			if (!std::filesystem::exists(file))
+			{
+				const std::filesystem::path legacy = LegacySettingsDirectory() / configName;
+				if (std::filesystem::exists(legacy))
+					file = legacy;
+			}
+
+			std::ifstream i(file);
+			if (!i.is_open()) {
+				if (handleConfigDepth > 2)
+					return; // cannot write the defaults either; leave them in memory
+
 				_HandleConfig(configName, configHandle::Save);
 				return _HandleConfig(configName, configHandle::Load);
 			}
-			i >> j;
+
+			try
+			{
+				i >> j;
+			}
+			catch (const json::exception&)
+			{
+				// Malformed file: carry on with an empty object so every field
+				// falls back to its default, rather than throwing out of here.
+				j = json::object();
+			}
 		}
 
 		try {
@@ -287,10 +386,12 @@ namespace ConfigSystem
 			HandleConfigItem(j["Triggerbot"]["triggerBotStomach"], handle, &Settings::Triggerbot::triggerBotStomach, false);
 			HandleConfigItem(j["Triggerbot"]["triggerbotFastShoot"], handle, &Settings::Triggerbot::triggerbotFastShoot, false);
 		}
-		catch (...)
+		catch (const json::exception& e)
 		{
-			_HandleConfig(configName, configHandle::Save);
-			return _HandleConfig(configName, configHandle::Load);
+			// HandleConfigItem already falls back per field, so reaching here
+			// means something structural.  Say so instead of rewriting the
+			// user's file and reloading it.
+			ConPrint((std::string("Config error: ") + e.what()).c_str(), Color(255, 100, 100));
 		}
 		// Applies to Load and Reset alike: both can leave a setting outside the
 		// domain the rest of the code assumes.
@@ -299,21 +400,48 @@ namespace ConfigSystem
 
 		if (handle == configHandle::Save)
 		{
-			std::ofstream o(std::string("C:\\GMOD-SDK-Settings\\") + configName);
-			if (o.bad())return;
+			// `o.bad()` is a write error on an already-open stream, not a
+			// failure to open: an unwritable path sailed past this check and the
+			// save silently did nothing.
+			std::ofstream o(directory / configName);
+			if (!o.is_open())
+			{
+				ConPrint("Could not write the config file", Color(255, 200, 0));
+				return;
+			}
+
 			o << std::setw(4) << j << std::endl;
 		}
 	}
 
-	// Why make this in two separate functions? Because oyu cannot use __try in functions that require object unwinding...
+	// This was SEH -- __try / __except(EXCEPTION_EXECUTE_HANDLER) -- wrapped
+	// around code whose failures are C++ exceptions.  Three things were wrong
+	// with that:
+	//
+	//   * EXCEPTION_EXECUTE_HANDLER catches *everything*, access violations
+	//     included, so a genuine memory bug in the config path was silently
+	//     converted into "rewrite the file and try again".
+	//   * The recovery path was not itself protected: if the Save or the Load
+	//     inside the handler failed in turn, it propagated straight out.
+	//   * It needed the split into two functions at all only because __try
+	//     cannot appear in a function requiring object unwinding -- which is a
+	//     statement about SEH, not about this code.
+	//
+	// The failures this actually has to survive are json::exception (handled per
+	// field above) and filesystem errors (handled through error_code and
+	// is_open), so a plain catch is both sufficient and honest.
 	void HandleConfig(const char* configName, configHandle handle) {
-		__try {
+		try
+		{
 			_HandleConfig(configName, handle);
 		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
+		catch (const std::exception& e)
 		{
-			_HandleConfig(configName, configHandle::Save);
-			return _HandleConfig(configName, configHandle::Load);
+			ConPrint((std::string("Config error: ") + e.what()).c_str(), Color(255, 100, 100));
+		}
+		catch (...)
+		{
+			ConPrint("Config error", Color(255, 100, 100));
 		}
 	}
 }

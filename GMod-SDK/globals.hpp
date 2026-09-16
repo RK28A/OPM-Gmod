@@ -179,6 +179,12 @@ namespace Globals {
 	int screenWidth, screenHeight;
 
 	bool* bSendpacket;
+
+	// Page protection bSendpacket's page had before Main() made it writable, so
+	// PerformUnload can put it back.  The page used to be switched to
+	// PAGE_EXECUTE_READWRITE and left that way for the life of the process.
+	DWORD bSendpacketProtection = 0;
+
 	unsigned int* predictionRandomSeed;
 	char* hostName; // UTF-8 encoding C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? 59 C3 CC CC CC CC CC CC CC CC CC CC 68 ? ? ? ?
 

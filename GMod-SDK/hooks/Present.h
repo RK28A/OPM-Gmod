@@ -153,7 +153,16 @@ static void PerformUnload()
 	}
 
 	if (Globals::bSendpacket)
+	{
 		*Globals::bSendpacket = true;
+
+		if (Globals::bSendpacketProtection)
+		{
+			DWORD ignored = 0;
+			VirtualProtect(Globals::bSendpacket, sizeof(bool), Globals::bSendpacketProtection, &ignored);
+			Globals::bSendpacketProtection = 0;
+		}
+	}
 
 	if (InputSystem)
 		InputSystem->EnableInput(true);
@@ -210,7 +219,10 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 		pDevice->GetCreationParameters(&param);
 		pDevice->GetSwapChain(0, &pChain);
 		if (pChain)
+		{
 			pChain->GetPresentParameters(&pp);
+			pChain->Release(); // GetSwapChain AddRefs; this reference was leaked
+		}
 
 		ImGui_ImplWin32_Init(Globals::window);
 		ImGui_ImplDX9_Init(pDevice);
