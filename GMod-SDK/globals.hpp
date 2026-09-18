@@ -49,8 +49,6 @@
 #define ClientModeOffset 0x0
 #define InputOffset 0x0
 #define RandomSeedOffset 0x2
-#define PresentModule "gameoverlayrenderer64"
-#define PresentPattern "\xFF\x15????\x8B\xF8\xEB\x1E"
 #define GetClassNamePattern "\xE8????\x4D\x8B\x47\x10"
 #define CL_MovePattern "\xE8????\xFF\x15????\xF2\x0F\x10\x0D????\x85\xFF"
 #define PredictionSeedPattern "\x48\x8B\xD1\x8B\x0D????"
@@ -66,8 +64,6 @@
 #define ClientModeOffset 0x5
 #define InputOffset 0x5
 #define RandomSeedOffset 0x5
-#define PresentModule "gameoverlayrenderer"
-#define PresentPattern  "\xFF\x15????\x8B\xF0\x85\xFF"
 #define GetClassNamePattern "\xE8????\x50\x8B\x43\x08"
 #define CL_MovePattern "\xE8????\x83\xC4\x08\xFF\x15????\xDC\x25????"
 #define BSendPacketOffset 0x2F
@@ -113,7 +109,12 @@ void* MoveHelper;
 
 _PaintTraverse oPaintTraverse;
 _FireEvent oFireEvent;
-char* present; // clean that
+// The IDirect3DDevice9 vtable, obtained from a throwaway device at start-up.
+// Present (index 17) is VMT-hooked here instead of scanning the Steam overlay
+// for its stored Present pointer -- the D3D9 COM vtable layout is fixed by the
+// OS, so this does not rot across game/overlay updates. Kept as a global (not a
+// Main() local) so RestoreVMTHooks() can put the slot back on unload.
+void** presentDeviceVTable = nullptr;
 _Present oPresent;
 MsgFn ConColorMsg;
 
