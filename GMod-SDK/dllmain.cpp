@@ -9,6 +9,7 @@
 
 #include "Interface.h"
 #include "globals.hpp"
+#include "hacks/Debug.h"
 
 #include "hooks/DrawModelExecute.h"
 #include "hooks/CreateMove.h"
@@ -26,12 +27,11 @@
 #include "engine/inetmessage.h"
 
 // Resolves one signature-scanned pointer, keeping the null out of the
-// arithmetic.
-//
-// `findPattern(...) + OFFSET` and `GetRealFromRelative(findPattern(...), ...)`
-// both read through the result, so a failed scan crashed here -- one line
-// *before* the `if (Globals::bSendpacket)` guards the review added downstream,
-// which is why those guards never fired.
+// arithmetic.  findPattern(...) + OFFSET and
+// GetRealFromRelative(findPattern(...), ...) both read through the result,
+// so a failed scan used to crash here, one line *before* the `if
+// (Globals::bSendpacket)` guards the review added downstream, which is why
+// those guards never fired.
 static char* ResolveScan(const char* module, std::string_view pattern, std::string_view name,
     int preOffset, int offset, int instructionSize, bool relative = true)
 {
@@ -40,6 +40,24 @@ static char* ResolveScan(const char* module, std::string_view pattern, std::stri
         return nullptr; // findPattern has already recorded the failure
 
     return GetRealFromRelative((char*)match + preOffset, offset, instructionSize, relative);
+}
+
+// Installs a VMT hook, but first checks the target object and the specific
+// vtable slot are actually mapped, and logs the outcome by name.  After a
+// Garry's Mod update a hard-coded offset/scan can resolve an interface to a
+// wild pointer; hooking through it used to take the whole game down (the
+// RenderView hook was the usual casualty).  Now it is logged and skipped, so
+// the rest of the module still loads and debug.log points at the stale offset.
+template<typename T>
+static T GuardedVMTHook(const char* name, PVOID** src, PVOID dst, int index, bool noRestore = false)
+{
+    if (!MemIsReadable(src) || !MemIsReadable(*src, (static_cast<size_t>(index) + 1) * sizeof(PVOID)))
+    {
+        DBG_ERROR("Hook '%s' skipped: object %p unreadable (stale offset/scan after a game update?)", name, (void*)src);
+        return (T)nullptr;
+    }
+    DBG_INFO("Hook '%s' installed (object %p, vtable index %d)", name, (void*)src, index);
+    return VMTHook<T>(src, dst, index, noRestore);
 }
 
 void Main()
@@ -59,6 +77,12 @@ void Main()
     SetConsoleTitle(L"GMod SDK - WIP - Coded by t.me/Gaztoof");
 #endif
     ConColorMsg = (MsgFn)GetProcAddress(GetModuleHandleW(L"tier0.dll"), ConColorMsgDec);
+
+    // Install the crash reporter / logger before the signature scans below, so
+    // an early fault (e.g. a pattern that no longer matches after an update)
+    // still produces a crash.log instead of a silent game crash.
+    Debug::Install();
+    DBG_INFO("Main() start");
 
     ConPrint("Successfully injected!", Color(0, 255, 0));
     ConfigSystem::HandleConfig("Default", ConfigSystem::configHandle::Load);
@@ -128,19 +152,60 @@ void Main()
     
     localPlayer = (C_BasePlayer*)ClientEntityList->GetClientEntity(EngineClient->GetLocalPlayer());
 
-    if(Lua = LuaShared->GetLuaInterface((unsigned char)LuaInterfaceType::LUA_CLIENT))
-        oRunStringEx = VMTHook< _RunStringEx>((PVOID**)Lua, (PVOID)hkRunStringEx, 111);
-    oCreateLuaInterfaceFn = VMTHook<_CreateLuaInterfaceFn>((PVOID**)LuaShared, (PVOID)hkCreateLuaInterfaceFn, 4);
-    oCloseLuaInterfaceFn = VMTHook<_CloseLuaInterfaceFn>((PVOID**)LuaShared, (PVOID)hkCloseInterfaceLuaFn, 5);
+    // Debug: a null critical interface or a null scan-derived pointer is the
+    // usual root cause of an early crash after a game update. Log them once so
+    // the reason is in debug.log instead of guessed at.
+    {
+        const struct { const char* name; const void* ptr; } criticals[] = {
+            { "EngineClient", EngineClient }, { "ClientEntityList", ClientEntityList },
+            { "CHLclient", CHLclient }, { "MaterialSystem", MaterialSystem },
+            { "CVar", CVar }, { "ModelRender", ModelRender }, { "RenderView", RenderView },
+            { "EngineTrace", EngineTrace }, { "GameEventManager", GameEventManager },
+            { "MatSystemSurface", MatSystemSurface }, { "ModelInfo", ModelInfo },
+            { "LuaShared", LuaShared }, { "Prediction", Prediction }, { "GameMovement", GameMovement },
+            { "bSendpacket", Globals::bSendpacket }, { "predictionRandomSeed", Globals::predictionRandomSeed },
+            { "hostName", Globals::hostName },
+        };
+        for (const auto& c : criticals)
+            if (!c.ptr) DBG_WARN("%s resolved to null", c.name);
+        DBG_INFO("Init complete: localPlayer=%p, slot=%d", (void*)localPlayer, EngineClient->GetLocalPlayer());
 
-    oCreateMove = VMTHook<_CreateMove>((PVOID**)ClientMode, (PVOID)hkCreateMove, 21);
-    oFrameStageNotify = VMTHook< _FrameStageNotify>((PVOID**)CHLclient, hkFrameStageNotify, 35);
-    oRenderView = VMTHook<_RenderView>((PVOID**)ViewRender, (PVOID)hkRenderView, 6);
-    oPaintTraverse = VMTHook< _PaintTraverse>((PVOID**)PanelWrapper, (PVOID)hkPaintTraverse, 41);
-    oDrawModelExecute = VMTHook< _DrawModelExecute>((PVOID**)ModelRender, (PVOID)hkDrawModelExecute, 20);
-    oProcessGMOD_ServerToClient = VMTHook< _ProcessGMOD_ServerToClient>((PVOID**)ClientState, (PVOID)hkProcessGMOD_ServerToClient, 64);
-    oRunCommand = VMTHook< _RunCommand>((PVOID**)Prediction, (PVOID)hkRunCommand, 19);
-    oPaint = VMTHook<_Paint>((PVOID**)EngineVGui, (PVOID)hkPaint, 13);
+        // These come from hard-coded byte offsets into game functions
+        // (ViewRenderOffset, GlobalVarsOffset, ...) rather than named
+        // interfaces, so they are what rots first after a game update. A stale
+        // offset produces a non-null but *garbage* pointer that crashes the
+        // moment it is used, so log the resolved value AND whether it points at
+        // readable memory -- that single line in debug.log tells you exactly
+        // which offset to re-reverse.
+        const struct { const char* name; void* ptr; } derived[] = {
+            { "ViewRender", ViewRender }, { "ClientMode", ClientMode },
+            { "GlobalVars", GlobalVars }, { "Input", Input },
+            { "ClientState", ClientState }, { "UniformRandomStream", UniformRandomStream },
+        };
+        for (const auto& d : derived)
+        {
+            if (!d.ptr)
+                DBG_WARN("%s resolved to null (stale offset?)", d.name);
+            else if (!MemIsReadable(d.ptr))
+                DBG_ERROR("%s resolved to unreadable %p -- stale offset, re-reverse it", d.name, d.ptr);
+            else
+                DBG_INFO("%s = %p", d.name, d.ptr);
+        }
+    }
+
+    if(Lua = LuaShared->GetLuaInterface((unsigned char)LuaInterfaceType::LUA_CLIENT))
+        oRunStringEx = GuardedVMTHook< _RunStringEx>("RunStringEx", (PVOID**)Lua, (PVOID)hkRunStringEx, 111);
+    oCreateLuaInterfaceFn = GuardedVMTHook<_CreateLuaInterfaceFn>("CreateLuaInterface", (PVOID**)LuaShared, (PVOID)hkCreateLuaInterfaceFn, 4);
+    oCloseLuaInterfaceFn = GuardedVMTHook<_CloseLuaInterfaceFn>("CloseLuaInterface", (PVOID**)LuaShared, (PVOID)hkCloseInterfaceLuaFn, 5);
+
+    oCreateMove = GuardedVMTHook<_CreateMove>("CreateMove", (PVOID**)ClientMode, (PVOID)hkCreateMove, 21);
+    oFrameStageNotify = GuardedVMTHook< _FrameStageNotify>("FrameStageNotify", (PVOID**)CHLclient, hkFrameStageNotify, 35);
+    oRenderView = GuardedVMTHook<_RenderView>("RenderView", (PVOID**)ViewRender, (PVOID)hkRenderView, 6);
+    oPaintTraverse = GuardedVMTHook< _PaintTraverse>("PaintTraverse", (PVOID**)PanelWrapper, (PVOID)hkPaintTraverse, 41);
+    oDrawModelExecute = GuardedVMTHook< _DrawModelExecute>("DrawModelExecute", (PVOID**)ModelRender, (PVOID)hkDrawModelExecute, 20);
+    oProcessGMOD_ServerToClient = GuardedVMTHook< _ProcessGMOD_ServerToClient>("ProcessGMOD_ServerToClient", (PVOID**)ClientState, (PVOID)hkProcessGMOD_ServerToClient, 64);
+    oRunCommand = GuardedVMTHook< _RunCommand>("RunCommand", (PVOID**)Prediction, (PVOID)hkRunCommand, 19);
+    oPaint = GuardedVMTHook<_Paint>("Paint", (PVOID**)EngineVGui, (PVOID)hkPaint, 13);
 
     // Owns the listeners, registers them once, and reports a failure instead of
     // assuming AddListener() worked.  They used to be raw `new` results parked
@@ -169,8 +234,20 @@ void Main()
 
     //GlobalVars->maxClients
     //GlobalVars + 0x14 = 1 will let u do anything lua related
-    oPresent = *(_Present*)(present);
-    *(_Present**)(present) = (_Present*)hkPresent;
+    // `present` is the address of a function pointer inside gameoverlayrenderer,
+    // found by pattern scan. If the scan no longer matches after an update it is
+    // null/garbage; reading and overwriting it blindly would crash, so guard it
+    // the same way as the VMT hooks above.
+    if (present && MemIsReadable(present, sizeof(_Present)))
+    {
+        oPresent = *(_Present*)(present);
+        *(_Present**)(present) = (_Present*)hkPresent;
+        DBG_INFO("Hook 'Present' installed (slot %p)", (void*)present);
+    }
+    else
+    {
+        DBG_ERROR("Hook 'Present' skipped: scan slot %p unreadable (pattern stale after a game update?)", (void*)present);
+    }
 
     //EngineClient->ClientCmd_Unrestricted("play \"items/suitchargeok1.wav\"");
         //Sleep(2200);

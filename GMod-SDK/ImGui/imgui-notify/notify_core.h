@@ -160,7 +160,11 @@ namespace notify
 			break;
 		}
 
-		percent = std::max(0.f, std::min(1.f, percent));
+		// std::clamp rather than std::max(std::min(...)): once this header is
+		// pulled into the module's translation unit after <Windows.h>, the
+		// min()/max() macros break a bare std::min/std::max (MSVC C2589).  clamp
+		// has no such macro.
+		percent = std::clamp(percent, 0.f, 1.f);
 		return percent * kOpacity;
 	}
 
@@ -177,7 +181,10 @@ namespace notify
 			return std::string();
 
 		std::string out;
-		out.reserve(std::min(max_length, std::strlen(text)));
+		// (std::min), parenthesised so the <Windows.h> min() macro (active in
+		// the module's translation unit) cannot expand it -- see the note on
+		// FadePercentFor above.
+		out.reserve((std::min)(max_length, std::strlen(text)));
 
 		for (const char* it = text; *it != '\0'; ++it)
 		{
@@ -226,6 +233,14 @@ namespace notify
 
 		va_list measure;
 		va_copy(measure, args);
+		// FormatV is a vsnprintf wrapper, so the format is legitimately non-literal
+		// here; clang's -Wformat-nonliteral (an error under the test build's
+		// -Werror) is a false positive for this deliberate forwarding. Suppress it
+		// locally for GCC/Clang -- MSVC never sees the pragma.
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 		const int needed = std::vsnprintf(nullptr, 0, format, measure);
 		va_end(measure);
 
@@ -236,6 +251,9 @@ namespace notify
 		std::string out(length, '\0');
 		if (length > 0)
 			std::vsnprintf(&out[0], length + 1, format, args);
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 		if (out.size() > kMaxMessageLength)
 		{

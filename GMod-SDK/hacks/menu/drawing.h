@@ -2,12 +2,26 @@
 
 #include <d3dx9.h>
 #include <d3d9.h>
-#include <d3dtypes.h> // D3DTLVERTEX, used by DrawFilledRect
+// <d3dtypes.h> is the pre-DX8 header; MSVC's <d3d9.h> refuses to be compiled
+// alongside it ("should not include d3dtypes.h when compiling for DX8 or newer
+// interfaces").  D3DTLVERTEX -- the one thing DrawFilledRect needs from that
+// world -- is defined locally below instead.
+//
+// <dcommon.h> was included for a D2D1_RECT_F that DrawRect computed and never
+// used -- a leftover from a Direct2D implementation.  Both are gone.
 #include "../../tier0/Vector.h"
 #include "../Utils.h"
 
-// <dcommon.h> was included for a D2D1_RECT_F that DrawRect computed and never
-// used -- a leftover from a Direct2D implementation.  Both are gone.
+// The one vertex layout DrawFilledRect uses.  Same bit layout as the old
+// D3DTLVERTEX from <d3dtypes.h>, without dragging in the DX7 headers.
+#ifndef GMODSDK_D3DTLVERTEX_DEFINED
+#define GMODSDK_D3DTLVERTEX_DEFINED
+struct D3DTLVERTEX
+{
+    float sx, sy, sz, rhw;
+    D3DCOLOR color;
+};
+#endif
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "d3dx9.lib")
