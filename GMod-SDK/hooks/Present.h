@@ -140,17 +140,9 @@ static void PerformUnload()
 
 	ConVarSpoofing::RestoreAll();
 
-	// Takes back every vtable hook, the device Reset hook included.
+	// Takes back every vtable hook, Present (D3D9 device vtable index 17) and
+	// the device Reset hook included.
 	RestoreVMTHooks();
-
-	if (present)
-	{
-#ifdef _WIN64
-		*(char**)(present) = (char*)(oPresent);
-#else
-		**(char***)(present) = (char*)oPresent;
-#endif
-	}
 
 	if (Globals::bSendpacket)
 	{
