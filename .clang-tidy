@@ -4,6 +4,11 @@
 # The SDK headers are reverse-engineered vtable layouts and the ImGui/Font
 # Awesome trees are vendored, so HeaderFilterRegex keeps the report to the code
 # this project actually writes.
+#
+# misc-use-anonymous-namespace and bugprone-macro-parentheses are off because
+# the TEST macro in tests/test_harness.h triggers both by construction: the
+# self-registering pattern needs internal linkage, and `#name` cannot be
+# parenthesised.  They fired on every test case and drowned the real report.
 Checks: >
   -*,
   bugprone-branch-clone,
@@ -41,9 +46,11 @@ Checks: >
   readability-misleading-indentation,
   readability-non-const-parameter,
   -performance-avoid-endl,
-  -performance-enum-size
+  -performance-enum-size,
+  -misc-use-anonymous-namespace,
+  -bugprone-macro-parentheses
 
-HeaderFilterRegex: '(GMod-SDK/(hacks|hooks|mathlib)/|GMod-SDK/globals\.hpp|GMod-SDK/ImGui/imgui-notify/(notify_core|imgui_notify)\.h|tests/)'
+HeaderFilterRegex: '(GMod-SDK/(hacks|hooks|mathlib|core)/|GMod-SDK/globals\.hpp|GMod-SDK/ImGui/imgui-notify/(notify_core|imgui_notify)\.h|tests/)'
 
 WarningsAsErrors: ''
 

@@ -5,63 +5,37 @@
 #include "../globals.hpp"
 #include "Utils.h"
 
-float ScaleDamage(int hitGroup)
+namespace AutoWall
 {
-	switch (hitGroup)
-	{
-	case HITGROUP_GENERIC:
-		return 1.f;
-	case HITGROUP_HEAD:
-		return 4.f;
-	case HITGROUP_CHEST:
-		return 1.f;
-	case HITGROUP_STOMACH:
-		return 1.25f;
-	case HITGROUP_LEFTARM:
-		return 1.f;
-	case HITGROUP_RIGHTARM:
-		return 1.f;
-	case HITGROUP_LEFTLEG:
-		return 0.75f;
-	case HITGROUP_RIGHTLEG:
-		return 0.75f;
-	case HITGROUP_GEAR:
-		return 1.f;
-	default:
-		return 1.f;
-		break;
-	}
-} // https://www.gamersdecide.com/articles/csgo-weapons-damage-chart
+	// A trace that stops this close to its endpoint hit the target rather than
+	// the world.  Was the bare literal 0.98f.
+	inline constexpr float kNearEndpointFraction = 0.98f;
+}
 
-
-// This is WIP, i'm releasing to UC before I finish making it.
+// Line of sight from `from` to `to`.
+//
+// This is *not* auto wall.  There is no penetration maths behind it -- no
+// surface properties, no damage falloff, no wall thickness -- it is a single
+// MASK_SHOT trace that answers "can I see the target".  The review already
+// relabelled the menu entry to "Require line of sight" for that reason; the
+// name of this function is kept so the call sites read unchanged.
+//
+// The dead weight that used to sit here is gone: ScaleDamage(), a CS:GO hitgroup
+// damage table that nothing called (its only caller was commented out) and that
+// would not have applied to GMod anyway, plus three blocks of commented-out
+// penetration sketching.
 bool CanHit(C_BasePlayer* target, Vector from, Vector to)
 {
-	if (!localPlayer || !localPlayer->GetActiveWeapon() || !EngineTrace)
-		return false; 
-	//C_BaseCombatWeapon* weapon = localPlayer->GetActiveWeapon();
-	//if (!weapon->UsesLua())
-		//return false;
-	// lua only for now.
+	if (!localPlayer || !EngineTrace || !localPlayer->GetActiveWeapon())
+		return false;
 
-	//float gunDamage = GetLuaWeaponDamage(weapon);
-
-	trace_t Trace;
+	trace_t trace;
 	CTraceFilter filter;
 	filter.pSkip = localPlayer;
-	Ray_t Ray;
 
-	Ray.Init(from, to);
-	EngineTrace->TraceRay(Ray, MASK_SHOT, &filter, &Trace);
-	//engineTrace->ClipRayToEntity(Ray, MASK_SHOT_HULL | CONTENTS_HITBOX, (IHandleEntity*)target, &Trace);
-	//m_PhysicsSurface->surface_data( Trace.surface.surfaceProps) = surfacedata_t*, get game.penetrationmodifier inside it
+	Ray_t ray;
+	ray.Init(from, to);
+	EngineTrace->TraceRay(ray, MASK_SHOT, &filter, &trace);
 
-	//float currentDamage = gunDamage;
-	if (Trace.m_pEnt == target || Trace.fraction >= 0.98f)
-	{
-		//gunDamage *= ScaleDamage(Trace.hitgroup);
-		return true;
-	}
-
-	return false;
+	return trace.m_pEnt == target || trace.fraction >= AutoWall::kNearEndpointFraction;
 }

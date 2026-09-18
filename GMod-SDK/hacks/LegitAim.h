@@ -250,8 +250,8 @@ void DoLegitAimbot(CUserCmd* cmd)
 		return;
 	}
 
-	bool keyDown = false;
-	getKeyState(Settings::Aimbot::aimbotKey, Settings::Aimbot::aimbotKeyStyle, &keyDown, henlo1, henlo2, henlo3);
+	const bool keyDown = PollKey(Settings::Aimbot::aimbotKey,
+		Settings::Aimbot::aimbotKeyStyle, Settings::Aimbot::aimbotKeyState);
 
 	if (!keyDown || !Settings::Aimbot::enableAimbot)
 	{

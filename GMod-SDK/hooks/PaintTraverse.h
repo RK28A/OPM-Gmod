@@ -1,6 +1,9 @@
 #pragma once
 
 #include "../globals.hpp"
+#include "../hacks/Executor.h"
+
+#include <string>
 
 void __fastcall hkPaintTraverse(VPanelWrapper* _this,
 #ifndef _WIN64
@@ -31,18 +34,29 @@ void __fastcall hkPaintTraverse(VPanelWrapper* _this,
 		PanelWrapper->SetMouseInputEnabled(panel, Globals::openMenu);
 		InputSystem->EnableInput(!Globals::openMenu);
 
-		auto l = Globals::waitingToBeExecuted.load();
-		if (l.first && l.second && oRunStringEx)
+		// Taken by value under a lock.  This used to read a raw char* out of an
+		// atomic pair -- a pointer to the ImGui editor buffer that the render
+		// thread was still writing.
+		std::string script;
+		if (Executor::TakePending(script))
 		{
-			auto Lua = LuaShared ? LuaShared->GetLuaInterface(Globals::executeState * 2) : nullptr;
+			auto luaInterface = LuaShared
+				? LuaShared->GetLuaInterface(static_cast<unsigned char>(Globals::executeState * 2))
+				: nullptr;
+
 			// GetLuaInterface can return null; every use below dereferences it.
-			if (Lua && !oRunStringEx(Lua, RandomString(16).c_str(), "", l.second, true, false, false, false)) {
-				const char* error = Lua->GetString(-1);
+			if (!oRunStringEx || !luaInterface)
+			{
+				static Color amber(255, 200, 0);
+				ConPrint("No Lua interface available; script not run", amber);
+			}
+			else if (!oRunStringEx(luaInterface, RandomString(16).c_str(), "", script.c_str(), true, false, false, false))
+			{
+				const char* error = luaInterface->GetString(-1);
 				static Color red(255, 0, 0);
 				ConPrint(error, red);
-				Lua->Pop();
+				luaInterface->Pop();
 			}
-			Globals::waitingToBeExecuted.store(std::make_pair(false, nullptr));
 		}
 	}
 
