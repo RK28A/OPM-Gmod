@@ -92,9 +92,24 @@ void Main()
     // and reporting all four at once is what makes a game update diagnosable.
     char* sendPacket = ResolveScan("engine", CL_MovePattern, "CL_MOVE", 0, 0x1, 5);
     Globals::bSendpacket = sendPacket ? (bool*)(sendPacket + BSendPacketOffset) : nullptr;
+
+    // These three are x64-only in globals.hpp: PredictionSeedPattern,
+    // HostNamePattern and MoveHelperPattern are undefined for Win32 (the
+    // upstream baseline never provided x86 signatures for them, and MSBuild
+    // Win32 never ran to notice).  In a Win32 build the pointers stay null and
+    // the null-guards downstream keep the affected features (prediction, fake
+    // lag path, script dumper's host label, movement replay) off.  Left in
+    // place until someone re-reverses the signatures for the x86 build.
+#ifdef _WIN64
     Globals::predictionRandomSeed = (unsigned int*)ResolveScan("client", PredictionSeedPattern, "predictionRandomSeed", 0x3, 0x2, 6);
     Globals::hostName = ResolveScan("client", HostNamePattern, "HostName", 0, 0x3, 7);
     MoveHelper = ResolveScan("client", MoveHelperPattern, "MoveHelper", 0, 0x3, 7); // https://i.imgur.com/p3C93PT.png
+#else
+    Globals::predictionRandomSeed = nullptr;
+    Globals::hostName = nullptr;
+    MoveHelper = nullptr;
+#endif
+
     present = ResolveScan(PresentModule, PresentPattern, "Present", 0, 0x2, 6, false);
 
     if (!missingPatterns.empty())
