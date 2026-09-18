@@ -19,6 +19,11 @@ namespace Triggerbot
 	}
 }
 
+// Runs from hkCreateMove (main thread). Traces from the eye along the current
+// command's view angles; on a live enemy player at an enabled hitgroup it
+// presses attack for this command. It never touches Lua and never removes
+// entities, so it cannot raise the engine's "!ThreadInMainThread" /
+// "EntityRemoved" Lua errors.
 void TriggerBot(CUserCmd* cmd)
 {
 	if (!Settings::Triggerbot::triggerBot)
@@ -49,27 +54,25 @@ void TriggerBot(CUserCmd* cmd)
 	if (!Triggerbot::IsEnabledHitgroup(trace.hitgroup))
 		return;
 
-	// This used to read:
-	//
-	//     static bool toggle = false;
-	//     toggle = !toggle;
-	//     if (Settings::Triggerbot::triggerbotFastShoot) {
-	//         if (toggle || Settings::Triggerbot::triggerbotFastShoot)
-	//             cmd->buttons |= IN_ATTACK;
-	//         else cmd->buttons &= ~IN_ATTACK;
-	//     }
-	//     else cmd->buttons |= IN_ATTACK;
-	//
-	// The inner condition is a tautology -- the outer `if` already guarantees
-	// triggerbotFastShoot is true -- so the `else` was unreachable, `toggle` was
-	// computed and never read, and both branches collapsed to the single line
-	// below.  The setting has never done anything.
-	//
-	// Written out as what it does, rather than inverted into what the dead
-	// branch suggests it was meant to do: that would be a behaviour change, and
-	// it is the author's call, not a defect fix.  The menu entry is relabelled
-	// to match, the way the review relabelled "Auto wall" to "Require line of
-	// sight"; Settings::Triggerbot::triggerbotFastShoot is still read and
-	// written by the config so existing files keep loading.
+	// The review pass found the old fast-shoot toggle was dead code (a
+	// tautology whose `else` was unreachable), left the setting inert, and
+	// deferred to the author on whether it should do anything. The author's
+	// call is to make it work: alternate IN_ATTACK every other command so
+	// semi-automatic weapons re-fire instead of the button staying held down.
+	// With the toggle off, hold attack (the classic full-auto behaviour). The
+	// menu entry is relabelled from "(not implemented)" to match.
+	if (Settings::Triggerbot::triggerbotFastShoot)
+	{
+		static bool shootThisTick = false;
+		shootThisTick = !shootThisTick;
+
+		if (shootThisTick)
+			cmd->buttons |= IN_ATTACK;
+		else
+			cmd->buttons &= ~IN_ATTACK;
+
+		return;
+	}
+
 	cmd->buttons |= IN_ATTACK;
 }
