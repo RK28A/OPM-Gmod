@@ -60,6 +60,63 @@ static T GuardedVMTHook(const char* name, PVOID** src, PVOID dst, int index, boo
     return VMTHook<T>(src, dst, index, noRestore);
 }
 
+// Obtains the IDirect3DDevice9 vtable by spinning up a throwaway device, so
+// Present can be VMT-hooked (index 17) instead of scanning gameoverlayrenderer
+// for the overlay's stored Present pointer -- a byte pattern that broke on every
+// Steam/overlay update. The vtable lives in d3d9.dll and is shared by every
+// device instance, so patching its Present slot also redirects the game's real
+// device. The COM vtable layout is fixed by the OS, so unlike the pattern this
+// does not rot. Returns nullptr (logged) if the probe device cannot be made.
+static void** GetD3D9DeviceVTable()
+{
+    IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
+    if (!d3d)
+    {
+        DBG_ERROR("Direct3DCreate9 failed; cannot resolve the Present vtable");
+        return nullptr;
+    }
+
+    // A dedicated, never-shown window for the probe device, so it never fights
+    // the game's own device for its window (an exclusive-fullscreen game device
+    // owns "Valve001"). The window and its class are torn down before returning.
+    WNDCLASSEXA wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = DefWindowProcA;
+    wc.hInstance = GetModuleHandleA(nullptr);
+    wc.lpszClassName = "GmodSdkD3DProbe";
+    RegisterClassExA(&wc); // harmless if already registered from a prior probe
+
+    HWND hwnd = CreateWindowExA(0, wc.lpszClassName, "", WS_OVERLAPPED,
+        0, 0, 1, 1, nullptr, nullptr, wc.hInstance, nullptr);
+
+    D3DPRESENT_PARAMETERS pp = {};
+    pp.Windowed = TRUE;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.hDeviceWindow = hwnd;
+
+    IDirect3DDevice9* device = nullptr;
+    const HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
+        D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+
+    void** vtable = nullptr;
+    if (SUCCEEDED(hr) && device)
+    {
+        vtable = *reinterpret_cast<void***>(device);
+        device->Release();
+    }
+    else
+    {
+        DBG_ERROR("Probe CreateDevice failed (0x%08lX); cannot resolve the Present vtable",
+            static_cast<unsigned long>(hr));
+    }
+
+    d3d->Release();
+    if (hwnd)
+        DestroyWindow(hwnd);
+    UnregisterClassA(wc.lpszClassName, wc.hInstance);
+    return vtable;
+}
+
 void Main()
 {
     ZeroMemory(Settings::ScriptInput, sizeof(Settings::ScriptInput));
@@ -110,8 +167,10 @@ void Main()
     MoveHelper = nullptr;
 #endif
 
-    present = ResolveScan(PresentModule, PresentPattern, "Present", 0, 0x2, 6, false);
-
+    // Present is no longer scanned here: it is hooked through the D3D9 device
+    // vtable (see GetD3D9DeviceVTable / the Present hook below), so a stale Steam
+    // overlay pattern can no longer land in missingPatterns and abort the whole
+    // load.
     if (!missingPatterns.empty())
     {
         std::string report = "Signature scan failed for:";
@@ -249,20 +308,15 @@ void Main()
 
     //GlobalVars->maxClients
     //GlobalVars + 0x14 = 1 will let u do anything lua related
-    // `present` is the address of a function pointer inside gameoverlayrenderer,
-    // found by pattern scan. If the scan no longer matches after an update it is
-    // null/garbage; reading and overwriting it blindly would crash, so guard it
-    // the same way as the VMT hooks above.
-    if (present && MemIsReadable(present, sizeof(_Present)))
-    {
-        oPresent = *(_Present*)(present);
-        *(_Present**)(present) = (_Present*)hkPresent;
-        DBG_INFO("Hook 'Present' installed (slot %p)", (void*)present);
-    }
+    // Present: hook the shared D3D9 device vtable at index 17. Registered through
+    // GuardedVMTHook like the others, so RestoreVMTHooks() puts it back on
+    // unload. presentDeviceVTable is a global (see globals.hpp) precisely so its
+    // address is still valid at that point.
+    presentDeviceVTable = GetD3D9DeviceVTable();
+    if (presentDeviceVTable)
+        oPresent = GuardedVMTHook<_Present>("Present", (PVOID**)&presentDeviceVTable, (PVOID)hkPresent, 17);
     else
-    {
-        DBG_ERROR("Hook 'Present' skipped: scan slot %p unreadable (pattern stale after a game update?)", (void*)present);
-    }
+        DBG_ERROR("Hook 'Present' skipped: could not obtain the D3D9 device vtable");
 
     //EngineClient->ClientCmd_Unrestricted("play \"items/suitchargeok1.wav\"");
         //Sleep(2200);

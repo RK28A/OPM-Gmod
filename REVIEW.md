@@ -315,3 +315,32 @@ than a crash. It does **not** fix the offsets it can't see: `ViewRenderOffset`
 (and the other code-scan offsets in `globals.hpp`) still need re-reversing
 against the current binary — a netvar dump does not contain them. Until then the
 RenderView-dependent visuals stay disabled and say so in the log.
+
+### Present hooked through the D3D9 device vtable, not the Steam overlay
+
+`Present` used to be found by scanning `gameoverlayrenderer64` for the overlay's
+stored Present pointer (`PresentPattern`). That pattern rots on every Steam
+overlay update, and in the merged start-up path a failed scan lands in
+`missingPatterns` and aborts the **whole** load — so one stale overlay pattern
+took the entire cheat down (no menu, no ESP, nothing).
+
+Present is now hooked the update-proof way (the "kiero" method):
+`GetD3D9DeviceVTable()` (dllmain.cpp) spins up a throwaway `IDirect3DDevice9` on
+a dedicated hidden window, reads its vtable, and releases it. That vtable lives
+in `d3d9.dll` and is shared by every device instance, so `GuardedVMTHook`-ing
+its Present slot (index 17, via the `presentDeviceVTable` global) also redirects
+the game's real device. The COM vtable layout is fixed by the OS, so it does not
+rot. Consequences:
+
+- `PresentModule` / `PresentPattern` (both arches) and the `char* present`
+  global are gone; Present is no longer part of the signature scan, so a Steam
+  update can no longer block the load.
+- Restore is now uniform: `RestoreVMTHooks()` takes Present back on unload like
+  every other vtable hook (the lazy Reset hook at index 16 already worked this
+  way), so the manual `present`-slot restore in `PerformUnload` was removed.
+- `d3d9.lib` was already linked (the `#pragma comment(lib, ...)` in
+  `hacks/menu/drawing.h`).
+
+Not built here (no Windows toolchain); first MSBuild run is the check. If the
+probe `CreateDevice` ever fails it is logged and Present is skipped (degraded,
+no crash) rather than aborting the load.
