@@ -173,6 +173,104 @@ The MSBuild job has **not** been run — there is no Windows toolchain in the
 environment these commits were written in. Treat its first run as part of
 review.
 
+---
+
+# Second pass — the whole tree
+
+The review above was scoped to PR #64's diff.  This pass went through every
+module the project actually owns (`hacks/`, `hooks/`, `core/`, `Memory.*`,
+`dllmain.cpp`, the project file), not just the lines that PR touched.
+
+## The defects that mattered
+
+| Where | What |
+| --- | --- |
+| `Utils.h` | `GetLuaEntBase` / `GetLuaEntName` / `GetClassName` returned a `const char*` from `Lua->GetString()` **after popping the value it points into** — GunHacks ran `strcmp` against it up to four times per shot |
+| `Utils.h` | `GetSteamID` returned `info.guid`, a pointer into a local that had gone out of scope |
+| `Utils.h` + 8 call sites | The `getKeyState` macro held per-expansion `static` state, so the two hooks that each read the thirdperson and freecam keys kept **separate toggle latches** and drifted out of phase; six call sites passed six arguments to a three-parameter macro, which only MSVC's preprocessor tolerates |
+| `dllmain.cpp` | Five signature-scanned pointers fed straight into arithmetic that dereferences them — a failed scan crashed *before* the null guards the first review added, which is why those guards could never fire |
+| `Present.h` / `GUI.h` | The Unload button released `menuBg` while it was still referenced by the ImGui draw list rendered at the end of that same frame |
+| `drawing.h` | No `OnLostDevice` / `OnResetDevice` at all, and both `D3DXCreate*` results discarded |
+| `ConVarSpoofing.h` | Wrote `"XD_" + name` back into `ConVar::pszName`, three bytes longer than the string pool entry it points at; `new` + explicit `->~SpoofedConVar()` meant leak, dangling pointer, and double `free` on a second unload |
+| `Executor.h` | `std::atomic<std::pair<bool, LPCSTR>>` is atomic in the *pointer*; the script text was a plain race against the ImGui editor buffer. `strcpy` into a fixed 128 KB buffer with no size check |
+| `ESP.h` | `weaponAmmo` dereferenced `GetActiveWeapon()` without the null check the branch four lines above already had |
+| `GunHacks.h` | `m_pVerifiedCommands[command_number % 90]` with a signed `command_number` that the cw loop walks down past zero — `-1 % 90` is `-1`, a write *before* an engine-owned array |
+| `ScriptDumper.h` | Server-supplied filenames, sanitised against neither reserved device names (`CON`, `NUL`, `COM1`…) nor trailing dots, and with no disk quota — the quota being something upstream's own comment asked for |
+| `ConfigSystem.h` | SEH (`__except(EXCEPTION_EXECUTE_HANDLER)`) around code whose failures are C++ exceptions, catching access violations too; one bad key discarded the whole file; the recovery path recursed without a depth limit |
+| `AntiAim.h` | Yaw accumulators were function-local `static`s initialised once and never wrapped — past 1e7 degrees a `float`'s ULP is ~1.0, so behaviour depended on injection uptime |
+| `Prediction.h` | `if (cmd->weaponselect; auto wp = …)` — the init-statement is discarded, so `SelectItem` ran on entity 0 |
+| `Triggerbot.h` | `if (fastShoot) { if (toggle \|\| fastShoot) … else … }` — tautology, unreachable `else`, unread `toggle`; the option has never done anything |
+| `notify_core.h` | **The clang CI leg has been red since it was added**: `-Wformat=2` implies `-Wformat-nonliteral`, which clang applies to the `va_list` forwarder.  The first review's "verified here" block only ever ran under gcc |
+
+## New portable headers
+
+The module is one MSVC/DirectX translation unit, so almost none of its logic
+could be compiled outside Visual Studio, let alone tested.  Four headers now
+carry the parts that have no business depending on Windows — `core/KeyState.h`,
+`core/PathSanitize.h`, `core/StringUtil.h`, `core/LuaStack.h` — each replacing
+something a module did inline and wrongly.  The suite goes from 24 cases to 67.
+
+Growing that directory is how coverage grows: anything moved into it becomes
+testable, and everything in it is exercised.
+
+## Verified
+
+```
+$ cd tests && make test                  # gcc, warnings as errors
+67 test(s), 0 failed, 0 assertion failure(s)
+
+$ make test CXX=clang++                  # clang, warnings as errors
+67 test(s), 0 failed, 0 assertion failure(s)
+
+$ make asan                              # ASan + UBSan
+67 test(s), 0 failed, 0 assertion failure(s)
+```
+
+## Not verified — read this before trusting the diff
+
+**The Windows module has not been compiled.** There is no MSVC, no Windows SDK
+and no DirectX SDK in the environment these commits were written in, and no
+MinGW either (which would not have helped: `d3dx9.h` ships only with the DirectX
+SDK).  Everything above that is not in `core/` or `tests/` has been reviewed and
+reasoned about, not built.  **Treat the first green MSBuild run as part of the
+review, not as a formality.**
+
+**The device reset path needs the game.** Hooking `IDirect3DDevice9::Reset`
+(vtable index 16) is the single riskiest change here, and it is exactly the one
+that cannot be exercised without a running GMod. It lives in its own commit so
+it can be reverted alone. The manual pass to run:
+
+- alt-tab in and out of exclusive fullscreen, with toasts on screen
+- change resolution, then change it back
+- map change, then reconnect
+- open and close the menu repeatedly, then press Unload and confirm the overlay
+  is gone and the game keeps rendering
+
+## Deliberately left alone
+
+These are decisions, not oversights.
+
+- **`ESP.h`'s entity probe.** `*(uintptr_t*)((char*)entity + 231 * sizeof(uintptr_t))`
+  is an unverified, architecture-dependent raw read at a hard-coded offset.
+  `GetClientClass()` is almost certainly the right check, but swapping it in
+  with no way to run the game would risk more than it repays. Named and
+  documented instead.
+- **`GunHacks.h`'s `% 90`.** Source's own `MULTIPLAYER_BACKUP` is 150. 90 is
+  what upstream used and it is not verified against GMod's build. Named, and the
+  index is bounds-checked so a wrong modulus can no longer write out of bounds.
+- **`FastSpin` adds its accumulator where its two siblings assign theirs.**
+  Almost certainly a typo, but changing it retunes how the pattern feels, which
+  is the author's call.
+- **`GunHacks.h`'s TFA branch** is entirely commented out upstream, so the
+  option does nothing for TFA weapons. Writing those fields blind would be a
+  guess.
+- **The module stays mapped after Unload.** Freeing it needs a `FreeLibrary`
+  from a thread that is not inside the Present hook; the usual workaround is a
+  detached thread that sleeps first, which is a race dressed up as a fix. Every
+  hook is removed and every device object released, so the module is inert.
+- **Font Awesome 5 Pro** is still embedded — see the first review's "Not done".
+  It remains the only licensing blocker in the repository.
+
 ## Offset refresh + crash-free resolution
 
 Two related changes, both x64 only (the x86 branches are untouched):

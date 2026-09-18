@@ -51,7 +51,154 @@ ImFont* executorFont;
 #endif
 
 ImGuiStyle* style;
-IDirect3DTexture9* menuBg;
+IDirect3DTexture9* menuBg = nullptr;
+
+// --- Device reset ----------------------------------------------------------
+//
+// Everything this module creates on the device lives in D3DPOOL_DEFAULT: the
+// D3DX line and fonts in drawing.h, ImGui's own vertex/index buffers and font
+// texture, and the menu background texture below.  A device reset -- alt-tab,
+// a resolution or mode change, the game losing focus in exclusive fullscreen --
+// invalidates all of it, and using any of it afterwards is undefined.  Nothing
+// handled that, which is why REVIEW.md's manual pass listed "DirectX 9 device
+// reset, alt-tab, resolution change" as the thing to try before merging: it was
+// not implemented, so there was nothing to try.
+//
+// IDirect3DDevice9::Reset is vtable index 16 (Present is 17).
+typedef HRESULT(__stdcall* _Reset)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+_Reset oReset = nullptr;
+
+// Recreated after every reset because the texture is D3DPOOL_DEFAULT.
+static void CreateMenuBackground(IDirect3DDevice9* device, D3DFORMAT backBufferFormat)
+{
+	if (!device || menuBg)
+		return;
+
+	if (FAILED(D3DXCreateTextureFromFileInMemoryEx(device, menuBackground, sizeof(menuBackground),
+		4096, 4096, D3DX_DEFAULT, 0, backBufferFormat, D3DPOOL_DEFAULT,
+		D3DX_DEFAULT, D3DX_DEFAULT, 0, nullptr, nullptr, &menuBg)))
+		menuBg = nullptr;
+}
+
+static void ReleaseMenuBackground()
+{
+	if (menuBg)
+	{
+		menuBg->Release();
+		menuBg = nullptr;
+	}
+}
+
+HRESULT __stdcall hkReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pPresentationParameters)
+{
+	if (!oReset)
+		return D3DERR_INVALIDCALL;
+
+	// Release every DEFAULT-pool resource before the reset, or the reset fails
+	// with D3DERR_DEVICELOST and the game never recovers.
+	OnLostDevice();
+	ImGui_ImplDX9_InvalidateDeviceObjects();
+	ReleaseMenuBackground();
+
+	const HRESULT result = oReset(device, pPresentationParameters);
+
+	// A failed reset leaves the device lost; the game will call Reset again, so
+	// recreate nothing and stay in the invalidated state until one succeeds.
+	if (SUCCEEDED(result))
+	{
+		ImGui_ImplDX9_CreateDeviceObjects();
+		OnResetDevice();
+
+		CreateMenuBackground(device, pPresentationParameters
+			? pPresentationParameters->BackBufferFormat
+			: D3DFMT_UNKNOWN);
+
+		// The overlay maths is all in screen space, so the cached size has to
+		// follow the new back buffer.
+		if (EngineClient)
+			EngineClient->GetScreenSize(Globals::screenWidth, Globals::screenHeight);
+	}
+
+	return result;
+}
+
+// Runs at the end of a frame, never from inside the menu that requested it.
+//
+// Order matters: stop the engine calling into this module first, then hand the
+// input back, and only then release the device objects -- by that point ImGui's
+// draw list for the frame has already been rendered, so nothing still points at
+// menuBg or at the D3DX objects.
+static void PerformUnload()
+{
+	if (Globals::window && Globals::oWndProc)
+		SetWindowLongPtrA(Globals::window, GWLP_WNDPROC, (LONG_PTR)Globals::oWndProc);
+
+	// Unregisters and destroys both listeners.  The C casts were only needed
+	// because the listeners inherited privately; they are
+	// `public IGameEventListener2` now.
+	GameEvents::Unregister();
+
+	ConVarSpoofing::RestoreAll();
+
+	// Takes back every vtable hook, the device Reset hook included.
+	RestoreVMTHooks();
+
+	if (present)
+	{
+#ifdef _WIN64
+		*(char**)(present) = (char*)(oPresent);
+#else
+		**(char***)(present) = (char*)oPresent;
+#endif
+	}
+
+	if (Globals::bSendpacket)
+	{
+		*Globals::bSendpacket = true;
+
+		if (Globals::bSendpacketProtection)
+		{
+			DWORD ignored = 0;
+			VirtualProtect(Globals::bSendpacket, sizeof(bool), Globals::bSendpacketProtection, &ignored);
+			Globals::bSendpacketProtection = 0;
+		}
+	}
+
+	if (InputSystem)
+		InputSystem->EnableInput(true);
+
+	if (PanelWrapper && Globals::lastPanelIdentifier)
+	{
+		PanelWrapper->SetKeyBoardInputEnabled(Globals::lastPanelIdentifier, false);
+		PanelWrapper->SetMouseInputEnabled(Globals::lastPanelIdentifier, false);
+	}
+
+	// Nothing will draw again: the hooks are gone and this is past
+	// RenderDrawData for the current frame.
+	ReleaseMenuBackground();
+	ShutdownRenderer();
+
+	ImGui_ImplDX9_Shutdown();
+	ImGui_ImplWin32_Shutdown();
+	ImGui::DestroyContext();
+
+	Globals::openMenu = false;
+
+#if _DEBUG
+	FreeConsole();
+#endif
+
+	ConPrint("Successfully unloaded!", Color(0, 255, 0));
+
+	// The module stays mapped.  Freeing it would mean calling FreeLibrary from
+	// a thread that is not executing module code, and the only thread available
+	// here is the one currently inside this hook -- it has to return through
+	// this function's own code first.  The usual workaround is a detached
+	// thread that sleeps and then calls FreeLibraryAndExitThread, which is a
+	// race dressed up as a fix.  Every hook is removed and every device object
+	// released, so the module is inert; re-injecting needs a fresh game
+	// process.
+}
 
 HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, CONST RECT* pDestRect, HWND hDestWindowOverride, CONST RGNDATA* pDirtyRegion)
 {
@@ -72,12 +219,20 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 		pDevice->GetCreationParameters(&param);
 		pDevice->GetSwapChain(0, &pChain);
 		if (pChain)
+		{
 			pChain->GetPresentParameters(&pp);
+			pChain->Release(); // GetSwapChain AddRefs; this reference was leaked
+		}
 
 		ImGui_ImplWin32_Init(Globals::window);
 		ImGui_ImplDX9_Init(pDevice);
 
-		D3DXCreateTextureFromFileInMemoryEx( pDevice, menuBackground, sizeof(menuBackground), 4096, 4096, D3DX_DEFAULT, NULL, pp.BackBufferFormat, D3DPOOL_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, NULL, NULL, NULL, &menuBg);
+		CreateMenuBackground(pDevice, pp.BackBufferFormat);
+
+		// Installed here rather than in Main(): the device only exists once the
+		// game has reached its first Present.  RestoreVMTHooks() takes it back
+		// on unload like every other vtable hook.
+		oReset = VMTHook<_Reset>((PVOID**)pDevice, (PVOID)hkReset, 16);
 
 		style = &ImGui::GetStyle();
 		ImGuiIO& io = ImGui::GetIO();
@@ -163,7 +318,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 
 		if (Settings::Aimbot::drawAimbotFov)
 		{
-			DrawCircle(Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0), Settings::Aimbot::aimbotFOV, Settings::Aimbot::aimbotFOV, ColorToRGBA(Settings::Aimbot::fovColor));
+			DrawCircle(Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0), Settings::Aimbot::aimbotFOV, kCircleMaxSegments, ColorToRGBA(Settings::Aimbot::fovColor));
 		}
 		if (Settings::Misc::drawCrosshair) {
 			DrawLine(Vector(Globals::screenWidth / 2 - Settings::Misc::crosshairSize, Globals::screenHeight / 2, 0), Vector(Globals::screenWidth / 2 + Settings::Misc::crosshairSize, Globals::screenHeight / 2, 0), ColorToRGBA(Settings::Misc::crossHairColor));
@@ -224,7 +379,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 					+ L"\nMove: " + std::to_wstring(cmd.forwardmove) + L", " + std::to_wstring(cmd.sidemove) + L", " + std::to_wstring(cmd.upmove)
 					+ L"\ntick_count: " + std::to_wstring(cmd.tick_count)
 					+ L"\nviewangles: " + std::to_wstring(cmd.viewangles.x) + L", " + std::to_wstring(cmd.viewangles.y) + L", " + std::to_wstring(cmd.viewangles.z);
-				DebugDrawTextW(Vector(10, 50, 0), userCmdDebug, ColorToRGBA(Color(255, 255, 255)), true);
+				DebugDrawString(Vector(10, 50, 0), userCmdDebug, ColorToRGBA(Color(255, 255, 255)), true);
 			}
 		}
 #endif // DEBUG
@@ -358,7 +513,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 	pDevice->SetVertexShader(vertexShader);
 	if (rt)
 	{
-		if (context = MaterialSystem->GetRenderContext())
+		if ((context = MaterialSystem->GetRenderContext()) != nullptr)
 		{
 			context->BeginRender();
 			context->SetRenderTarget(rt);
@@ -366,5 +521,13 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 		}
 	}
 
-	return oPresent(pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
+	// Deferred from the menu's Unload button: the frame is fully rendered, so
+	// releasing the device objects here cannot pull the rug out from under a
+	// draw list that is still pending.  oPresent is captured first because
+	// PerformUnload restores the pointer it is read from.
+	const _Present presentToCall = oPresent;
+	if (Globals::pendingUnload.exchange(false))
+		PerformUnload();
+
+	return presentToCall(pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
 }

@@ -37,6 +37,7 @@
 #include "client/IPrediction.h"
 #include "client/IGameMovement.h"
 #include "hacks/ConVarSpoofing.h"
+#include "core/KeyState.h"
 
 #include <cmath>
 #include <math.h>
@@ -130,8 +131,9 @@ void ConPrint(const char* text, Color col)
 }
 
 
-SpoofedConVar* spoofedAllowCsLua;
-SpoofedConVar* spoofedCheats;
+// The two spoofed cvars used to be raw globals here, `new`-ed from
+// FrameStageNotify and never deleted.  They are owned by
+// ConVarSpoofing::allowCsLua / ::cheats now (see hacks/ConVarSpoofing.h).
 
 struct chamsSetting {
 	Color hiddenColor = Color(255, 255, 255, 255);
@@ -165,21 +167,38 @@ namespace Globals {
 	bool choke;
 	VPanel* lastPanelIdentifier;
 
-	SpoofedConVar* spoofedAllowCsLua;
-	SpoofedConVar* spoofedCheats;
-
 	std::atomic<vmatrix_t> viewMatr;
-	std::atomic<std::pair<bool, LPCSTR>> waitingToBeExecuted;
+
+	// waitingToBeExecuted used to live here as
+	// std::atomic<std::pair<bool, LPCSTR>>: atomic in the pointer only, while
+	// the string it pointed at was the ImGui editor buffer that another thread
+	// was writing.  The hand-off is by value under a mutex now, in
+	// hacks/Executor.h.
 	int executeState = 0;
 
 	int screenWidth, screenHeight;
 
 	bool* bSendpacket;
+
+	// Page protection bSendpacket's page had before Main() made it writable, so
+	// PerformUnload can put it back.  The page used to be switched to
+	// PAGE_EXECUTE_READWRITE and left that way for the life of the process.
+	DWORD bSendpacketProtection = 0;
+
 	unsigned int* predictionRandomSeed;
 	char* hostName; // UTF-8 encoding C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? 59 C3 CC CC CC CC CC CC CC CC CC CC 68 ? ? ? ?
 
 	HWND window;
 	WNDPROC oWndProc;
+
+	// Set by the menu's Unload button, acted on at the *end* of the Present
+	// hook.  The button used to tear everything down in place, from inside the
+	// frame it was drawn in: menuBg had already been handed to ImGui::Image()
+	// and was still referenced by the draw list that ImGui_ImplDX9_RenderDrawData
+	// consumes at the end of that same frame, so releasing it there was a
+	// use-after-free on the texture.  Deferring the teardown past RenderDrawData
+	// means nothing can still be pointing at what is being released.
+	std::atomic<bool> pendingUnload{ false };
 }
 namespace Settings {
 	ButtonCode_t menuKey = KEY_INSERT;
@@ -291,6 +310,12 @@ namespace Settings {
 		bool enableAntiAim;
 		ButtonCode_t antiAimKey = KEY_NONE;
 		int antiAimKeyStyle = 1; // KEY_NONE;
+
+		// Toggle latch for the binding above.  One per *feature*: see PollKey()
+		// in hacks/Utils.h for why the getKeyState macro's per-expansion
+		// statics were a bug rather than an implementation detail.
+		input::KeyState antiAimKeyState;
+
 		float fakePitch;
 	}
 	namespace Aimbot {
@@ -299,6 +324,7 @@ namespace Settings {
 		bool lockOnTarget = false;
 		ButtonCode_t aimbotKey = KEY_NONE;
 		int aimbotKeyStyle = 1;
+		input::KeyState aimbotKeyState;
 		bool enableAimbot = false;
 		int aimbotHitbox = 0;
 		bool aimbotAutoWall = false;
@@ -368,6 +394,14 @@ namespace Settings {
 		bool thirdperson;
 		ButtonCode_t thirdpersonKey = KEY_NONE;
 		int thirdpersonKeyStyle = 1;
+
+		// Read from two hooks -- FrameStageNotify (whether to rewrite the local
+		// view angles) and RenderView (whether to move the camera).  They have
+		// to share one latch or, in toggle mode, they answer differently on the
+		// same frame and the feature half-applies.  The getKeyState macro gave
+		// each call site its own statics, which is exactly that bug.
+		input::KeyState thirdpersonKeyState;
+
 		float thirdpersonDistance;
 
 		bool removeHands;
@@ -381,6 +415,10 @@ namespace Settings {
 		bool freeCam;
 		ButtonCode_t freeCamKey = KEY_NONE;
 		int freeCamKeyStyle = 1;
+
+		// Shared for the same reason as thirdpersonKeyState above.
+		input::KeyState freeCamKeyState;
+
 		float freeCamSpeed;
 
 		bool hitmarkerSoundEnabled = false;
@@ -397,10 +435,12 @@ namespace Settings {
 		float fakeLagTicks;
 		ButtonCode_t fakeLagKey = KEY_NONE;
 		int fakeLagKeyStyle = 1;
+		input::KeyState fakeLagKeyState;
 
 		bool zoom;
 		ButtonCode_t zoomKey = KEY_NONE;
 		int zoomKeyStyle = 1;
+		input::KeyState zoomKeyState;
 		float zoomFOV = 90.f;
 
 		bool svCheats;

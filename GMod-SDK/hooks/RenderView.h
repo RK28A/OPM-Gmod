@@ -14,8 +14,8 @@ bool __fastcall hkRenderView(CViewRender* ViewRender,
 #endif
 CViewSetup& view, int nClearFlags, int whatToDraw)
 {
-	bool zoomKeyDown = false;
-	getKeyState(Settings::Misc::zoomKey, Settings::Misc::zoomKeyStyle, &zoomKeyDown, henlo69, henlo70, henlo71);
+	const bool zoomKeyDown = PollKey(Settings::Misc::zoomKey,
+		Settings::Misc::zoomKeyStyle, Settings::Misc::zoomKeyState);
 
 	// Braced, but the behaviour is unchanged: the else belongs to the inner if,
 	// so the world FOV is only touched while the option is on.
@@ -64,8 +64,8 @@ CViewSetup& view, int nClearFlags, int whatToDraw)
 	
 	static Vector camPos = Vector(0,0,0);
 
-	bool thirdpKeyDown = false;
-	getKeyState(Settings::Misc::thirdpersonKey, Settings::Misc::thirdpersonKeyStyle, &thirdpKeyDown, henlo1, henlo2, henlo3);
+	const bool thirdpKeyDown = PollKey(Settings::Misc::thirdpersonKey,
+		Settings::Misc::thirdpersonKeyStyle, Settings::Misc::thirdpersonKeyState);
 	static bool lastThirdPersonState = false;
 	if (localPlayer && Settings::Misc::thirdperson && thirdpKeyDown) {
 		lastThirdPersonState = true;
@@ -81,8 +81,8 @@ CViewSetup& view, int nClearFlags, int whatToDraw)
 		
 	}
 
-	bool freeCamKeyDown = false;
-	getKeyState(Settings::Misc::freeCamKey, Settings::Misc::freeCamKeyStyle, &freeCamKeyDown, henlo4, henlo5, henlo6);
+	const bool freeCamKeyDown = PollKey(Settings::Misc::freeCamKey,
+		Settings::Misc::freeCamKeyStyle, Settings::Misc::freeCamKeyState);
 
 	static bool lastFreeCamState = false;
 	if (localPlayer && Settings::Misc::freeCam && freeCamKeyDown)
