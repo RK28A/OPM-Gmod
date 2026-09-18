@@ -117,26 +117,29 @@ static void** GetD3D9DeviceVTable()
         hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
             D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
 
-    void** vtable = nullptr;
     if (SUCCEEDED(hr) && device)
     {
-        vtable = *reinterpret_cast<void***>(device);
+        void** vtable = *reinterpret_cast<void***>(device);
         DBG_INFO("Present probe: HAL device %p, vtable %p, Present(vtable[17]) %p",
             (void*)device, (void*)vtable, vtable ? vtable[17] : nullptr);
-        device->Release();
-    }
-    else
-    {
-        DBG_ERROR("Probe CreateDevice failed (0x%08lX); the game is likely in "
-            "exclusive fullscreen -- try borderless/windowed",
-            static_cast<unsigned long>(hr));
+
+        // Deliberately leak the probe device, its d3d and its window. On this
+        // machine the device vtable is heap-allocated (a 0x0000...-range address,
+        // i.e. a d3d9 wrapper / D3D9on12 layer, not the classic in-module .rdata
+        // table). Releasing the probe therefore FREES the very table we hook, and
+        // writing the detour into freed heap corrupted memory and crashed right
+        // after "Hook 'Present' installed". Keeping the probe alive keeps the
+        // vtable valid for the whole session; the one device is negligible.
+        return vtable;
     }
 
+    DBG_ERROR("Probe CreateDevice failed (0x%08lX); Present not hooked",
+        static_cast<unsigned long>(hr));
     d3d->Release();
     if (hwnd)
         DestroyWindow(hwnd);
     UnregisterClassA(wc.lpszClassName, wc.hInstance);
-    return vtable;
+    return nullptr;
 }
 
 void Main()
