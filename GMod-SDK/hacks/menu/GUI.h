@@ -376,10 +376,10 @@ namespace GUI
 				Menu::InsertCheckbox("Head", &Settings::Triggerbot::triggerBotHead);
 				Menu::InsertCheckbox("Chest", &Settings::Triggerbot::triggerBotChest);
 				Menu::InsertCheckbox("Stomach", &Settings::Triggerbot::triggerBotStomach);
-				// Relabelled rather than removed: the option has never had any
-				// effect (see the tautology documented in Triggerbot.h), and
-				// the config key is kept so existing files still load.
-				Menu::InsertCheckbox("Fast Shoot (not implemented)", &Settings::Triggerbot::triggerbotFastShoot);
+				// Now functional: TriggerBot() alternates IN_ATTACK each command
+				// when this is on, so semi-automatic weapons re-fire instead of
+				// the button staying held (see Triggerbot.h).
+				Menu::InsertCheckbox("Fast Shoot", &Settings::Triggerbot::triggerbotFastShoot);
 
 				style->ItemSpacing = ImVec2(0, 0);
 				style->WindowPadding = ImVec2(6, 6);
