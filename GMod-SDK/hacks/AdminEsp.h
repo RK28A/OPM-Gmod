@@ -122,7 +122,7 @@ void doAdminEsp()
 			std::string label = group.empty() ? "[ADMIN] " : ("[" + group + "] ");
 			label += info.name;
 
-			DrawTextW(Vector(head.x, head.y, 0), StringToWString(label), color, true);
+			DrawString(Vector(head.x, head.y, 0), StringToWString(label), color, true);
 		}
 	}
 }

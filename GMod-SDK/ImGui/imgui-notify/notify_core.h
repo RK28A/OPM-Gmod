@@ -210,6 +210,22 @@ namespace notify
 
 	// vsnprintf wrapper that reports rather than hides truncation, and never
 	// relies on the buffer being NUL-terminated by a failed call.
+	//
+	// -Wformat=2 implies -Wformat-nonliteral, and clang (unlike gcc) applies it
+	// to a va_list forwarder like this one: it cannot see that `format` was a
+	// literal at the Format() call site one frame up.  Forwarding is the entire
+	// point of the function, so the diagnostic is suppressed here, narrowly,
+	// rather than by weakening -Wformat=2 for the whole build.  Callers that
+	// take externally-controlled text still pass it as an *argument* (SetContent
+	// / "%s"), never as the format -- that is what the review's format-string
+	// fixes were about, and this pragma does not relax it.
+#if defined(__clang__)
+#	pragma clang diagnostic push
+#	pragma clang diagnostic ignored "-Wformat-nonliteral"
+#elif defined(__GNUC__)
+#	pragma GCC diagnostic push
+#	pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 	[[nodiscard]] inline std::string FormatV(const char* format, va_list args)
 	{
 		if (format == nullptr)
@@ -247,6 +263,11 @@ namespace notify
 
 		return out;
 	}
+#if defined(__clang__)
+#	pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#	pragma GCC diagnostic pop
+#endif
 
 	[[nodiscard]] inline std::string Format(const char* format, ...)
 	{

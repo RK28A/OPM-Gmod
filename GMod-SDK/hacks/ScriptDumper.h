@@ -1,133 +1,190 @@
 #pragma once
+
 #include "../globals.hpp"
+#include "../core/PathSanitize.h"
+
+#include <Windows.h>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
-#include <Windows.h>
-#include <string>
-#include <iostream>
 #include <optional>
+#include <string>
 
 namespace fs = std::filesystem;
-fs::path SanitizePath(fs::path in)
+
+namespace ScriptDumper
 {
-	fs::path retPath;
-	for (const auto& part : in)
-		if (part != ".." && part != "\\" && part != "/" )
+	// Everything below is named by the *server*: the paths it passes to
+	// RunStringEx become directory and file names on the local disk.
+
+	// "Idk why, but thinking that the server can just spam runstrings to you
+	// will just eventually overload your disk / lag you sucks." -- upstream,
+	// which identified the problem and then did not implement a limit.  These
+	// are that limit.  They reset per injection, not per server.
+	inline constexpr std::uintmax_t kMaxTotalBytes = 64ull * 1024ull * 1024ull; // 64 MB
+	inline constexpr int kMaxFiles = 4096;
+
+	inline std::atomic<std::uintmax_t> bytesWritten{ 0 };
+	inline std::atomic<int> filesWritten{ 0 };
+	inline std::atomic<bool> quotaReported{ false };
+
+	[[nodiscard]] inline bool ReserveQuota(std::size_t size)
+	{
+		if (filesWritten.load() >= kMaxFiles
+			|| bytesWritten.load() + size > kMaxTotalBytes)
 		{
-			std::string outPartName;
-			for (auto ch : part.string())
+			// Said once, not once per script.
+			if (!quotaReported.exchange(true))
+				ConPrint("Script dumper quota reached; further scripts are not written to disk", Color(255, 200, 0));
+
+			return false;
+		}
+
+		bytesWritten += size;
+		++filesWritten;
+		return true;
+	}
+
+	// Base directory for the dumps.
+	//
+	// Was hard-coded to "C:\GaztoofScriptHook\", which writes to the root of the
+	// system drive -- it fails outright on a machine where that is not writable,
+	// and it carries the upstream author's name into every fork.  %LOCALAPPDATA%
+	// is where per-user application data belongs.
+	[[nodiscard]] inline fs::path BaseDirectory()
+	{
+		char buffer[MAX_PATH] = {};
+		const DWORD length = GetEnvironmentVariableA("LOCALAPPDATA", buffer, sizeof(buffer));
+
+		if (length > 0 && length < sizeof(buffer))
+			return fs::path(buffer) / "GMod-SDK" / "ScriptHook";
+
+		// No LOCALAPPDATA (a service account, a stripped environment): fall back
+		// to the current directory rather than to a path that may not exist.
+		return fs::path("GMod-SDK-ScriptHook");
+	}
+
+	// Identifies the server the scripts came from, as one safe path component.
+	[[nodiscard]] inline std::string ServerFolderName()
+	{
+		std::string label;
+
+		if (EngineClient && EngineClient->GetNetChannelInfo() && EngineClient->GetNetChannelInfo()->GetAddress())
+		{
+			if (Globals::hostName && *Globals::hostName)
 			{
-				if ((ch == '\\' || ch == '/' || ch == ':' || ch == '?' || ch == '"' || ch == '<' || ch == '>' || ch == '|') && part != in.root_name()) // hm that's bad
-					outPartName += '.';
-				else if (ch >= ' ' && ch <= '~')
-					outPartName += ch;
+				label = Globals::hostName;
+				label += " - ";
 			}
 
-			retPath += outPartName;
-			if(outPartName != in.filename())
-			retPath += "\\";
+			label += EngineClient->GetNetChannelInfo()->GetAddress();
 		}
 
-	return retPath;
-}
-void CreateRecurringDir(fs::path in)
-{
-	fs::path out;
-	for (const auto& part : in)
+		if (label.empty())
+			label = "No Server";
+
+		return pathsafe::SanitizeComponent(label);
+	}
+
+	// Splits a server-supplied path into sanitised components.
+	//
+	// The old SanitizePath() replaced a handful of characters and stopped there:
+	// reserved device names (CON, NUL, COM1...), trailing dots and spaces that
+	// Windows silently strips, '*', and unbounded length all went through.  Its
+	// own comment on the character filter read "hm that's bad".
+	[[nodiscard]] inline fs::path SanitizeRelativePath(const std::string& raw)
 	{
-		if (part != "\\" && part != "/")
+		fs::path out;
+		std::string component;
+
+		for (const char c : raw)
 		{
-			out += part;
-			out += "\\";
+			if (c == '/' || c == '\\')
+			{
+				if (!component.empty())
+					out /= pathsafe::SanitizeComponent(component);
+
+				component.clear();
+				continue;
+			}
+
+			component += c;
 		}
 
-		if(out != out.root_path())
-			fs::create_directory(out);
+		if (!component.empty())
+			out /= pathsafe::SanitizeComponent(component);
+
+		if (out.empty())
+			out = pathsafe::SanitizeComponent(std::string());
+
+		return out;
 	}
 }
 
-// Idk why, but thinking that the server can just spam runstrings to you will just eventually overload your disk / lag you sucks.
-// And at the same time, they could be loading all of their scripts through net/runstrings :/
+// Dumps a script the server asked the client to run, and returns a replacement
+// body when the user has staged one in the Detour tree.
 std::optional<std::string> SaveScript(std::string fileName, std::string fileContent)
 {
 	try
 	{
-		if (fileName == "RunString(Ex)" || fileName.find('.') == std::string::npos)fileName = "runString.lua";
+		if (fileName == "RunString(Ex)" || fileName.find('.') == std::string::npos)
+			fileName = "runString.lua";
 
-		fs::path scripthookPath = "C:\\GaztoofScriptHook\\Original\\";
-		fs::path detourPath = "C:\\GaztoofScriptHook\\Detour\\";
+		const bool isAnonymous = (fileName == "runString.lua");
 
-		if (EngineClient->GetNetChannelInfo() && EngineClient->GetNetChannelInfo()->GetAddress())
+		const fs::path base = ScriptDumper::BaseDirectory();
+		const std::string server = ScriptDumper::ServerFolderName();
+		const fs::path relative = ScriptDumper::SanitizeRelativePath(fileName);
+
+		const fs::path originalPath = base / "Original" / server / relative;
+		const fs::path detourPath = base / "Detour" / server / relative;
+
+		// create_directories() does what the hand-rolled CreateRecurringDir()
+		// was reimplementing, and reports failure.
+		std::error_code ec;
+		fs::create_directories(originalPath.parent_path(), ec);
+		fs::create_directories(detourPath.parent_path(), ec);
+
+		// A staged replacement wins, and costs no disk.
+		std::ifstream detourFile(detourPath, std::ios::binary);
+		if (detourFile.is_open() && !isAnonymous)
 		{
-			// Globals::hostName is a scan-derived char*; std::string(nullptr) is UB.
-			std::string hostName = Globals::hostName ? Globals::hostName : "";
+			std::string replacement((std::istreambuf_iterator<char>(detourFile)),
+				std::istreambuf_iterator<char>());
 
-			if (hostName.length()) {
-				std::replace(hostName.begin(), hostName.end(), '/', ' ');
-				scripthookPath += hostName;
-				detourPath += hostName;
+			// std::string comparison, not strcmp: a script containing a NUL byte
+			// used to compare equal to any script sharing its prefix.
+			if (replacement != fileContent)
+			{
+				ConPrint(("Successfully detoured script \"" + fileName + "\" !").c_str(), Color(255, 51, 113));
+				return replacement;
 			}
-			scripthookPath += " - ";
-			detourPath += " - ";
-			scripthookPath += EngineClient->GetNetChannelInfo()->GetAddress();
-			detourPath += EngineClient->GetNetChannelInfo()->GetAddress();
-		}
-		else {
-			scripthookPath += "No Server";
-			detourPath += "No Server";
+
+			return {};
 		}
 
-		scripthookPath += "\\";
-		detourPath += "\\";
+		if (!ScriptDumper::ReserveQuota(fileContent.size()))
+			return {};
 
-		scripthookPath += fs::path(fileName);
-		detourPath += fs::path(fileName);
-
-		fs::path targetDir = SanitizePath(scripthookPath);
-		fs::path detourDir = SanitizePath(detourPath);
-
-		CreateRecurringDir(targetDir.parent_path());
-		CreateRecurringDir(detourDir.parent_path());
-
-		if (fileName != "runString.lua")
-		{
-			std::string strToPrint = "Successfully dumped script \"" + fileName + "\" !";
-			ConPrint(strToPrint.c_str(), Color(204, 51, 255));
-		}
-
-		std::ofstream outFile;
-		outFile.open(targetDir.string());
-		if (outFile.good())
+		std::ofstream outFile(originalPath, std::ios::binary | std::ios::trunc);
+		if (outFile.is_open())
 		{
 			outFile << fileContent;
-			outFile.close();
+
+			if (!isAnonymous)
+				ConPrint(("Successfully dumped script \"" + fileName + "\" !").c_str(), Color(204, 51, 255));
 		}
-
-		std::ifstream inFile;
-		inFile.open(detourDir.string());
-		if (inFile.good() && fileName != "runString.lua") {
-
-			std::string content((std::istreambuf_iterator<char>(inFile)),
-				(std::istreambuf_iterator<char>()));
-			if (!strcmp(content.c_str(), fileContent.c_str()))return {};
-
-			std::string strToPrint = "Successfully detoured script \"" + fileName + "\" !";
-			ConPrint(strToPrint.c_str(), Color(255, 51, 113));
-
-			fileContent = content;
-			return fileContent;
-		}
-		/*else {
-			std::ofstream outDetourFile;
-			outDetourFile.open(detourDir.string());
-			if (outDetourFile.good())
-			{
-				outDetourFile << fileContent;
-				outDetourFile.close();
-			}
-		}*/
 	}
-	catch (...) {}
+	catch (const std::exception& e)
+	{
+		// `catch (...) {}` swallowed everything in silence, so a dumper that
+		// never wrote a byte looked exactly like one that was working.
+		ConPrint((std::string("Script dumper error: ") + e.what()).c_str(), Color(255, 100, 100));
+	}
+	catch (...)
+	{
+		ConPrint("Script dumper error", Color(255, 100, 100));
+	}
 
 	return {};
 }

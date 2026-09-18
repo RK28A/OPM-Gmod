@@ -376,7 +376,10 @@ namespace GUI
 				Menu::InsertCheckbox("Head", &Settings::Triggerbot::triggerBotHead);
 				Menu::InsertCheckbox("Chest", &Settings::Triggerbot::triggerBotChest);
 				Menu::InsertCheckbox("Stomach", &Settings::Triggerbot::triggerBotStomach);
-				Menu::InsertCheckbox("Fast Shoot", &Settings::Triggerbot::triggerbotFastShoot);
+				// Relabelled rather than removed: the option has never had any
+				// effect (see the tautology documented in Triggerbot.h), and
+				// the config key is kept so existing files still load.
+				Menu::InsertCheckbox("Fast Shoot (not implemented)", &Settings::Triggerbot::triggerbotFastShoot);
 
 				style->ItemSpacing = ImVec2(0, 0);
 				style->WindowPadding = ImVec2(6, 6);
@@ -700,37 +703,18 @@ namespace GUI
 				Menu::InsertButtonMiddle("Unload", unloadPressed);
 				if (unloadPressed)
 				{
-					SetWindowLongPtrA(Globals::window, GWLP_WNDPROC, (LONG_PTR)Globals::oWndProc);
-
-					// Unregisters and destroys both listeners.  The C casts were
-					// only needed because the listeners inherited privately;
-					// they are `public IGameEventListener2` now.
-					GameEvents::Unregister();
-
-					if (spoofedAllowCsLua)
-						spoofedAllowCsLua->~SpoofedConVar();
-					if (spoofedCheats)
-						spoofedCheats->~SpoofedConVar();
-
-					RestoreVMTHooks();
-					if (Globals::bSendpacket)
-						*Globals::bSendpacket = true;
-					
-#ifdef _WIN64
-					* (char**)(present) = (char*)(oPresent);
-#else
-					** (char***)(present) = (char*)oPresent;
-#endif
-					InputSystem->EnableInput(true);
-					PanelWrapper->SetKeyBoardInputEnabled(Globals::lastPanelIdentifier, false);
-					PanelWrapper->SetMouseInputEnabled(Globals::lastPanelIdentifier, false);
-
+					// Request only.  The teardown itself runs in PerformUnload()
+					// at the end of the Present hook, once ImGui's draw list has
+					// been consumed.
+					//
+					// Doing it here, as this used to, released menuBg while it
+					// was still referenced by the draw list that
+					// ImGui_ImplDX9_RenderDrawData renders at the end of this
+					// very frame -- a use-after-free on the texture -- and left
+					// the D3DX font and line objects, the ImGui context and the
+					// Win32 backend alive for good.
+					Globals::pendingUnload = true;
 					Globals::openMenu = false;
-
-#if _DEBUG
-					FreeConsole();
-#endif
-					ConPrint("Successfully unloaded!", Color(0, 255, 0));
 				}
 				style->ItemSpacing = ImVec2(0, 0);
 				style->WindowPadding = ImVec2(6, 6);
@@ -762,17 +746,31 @@ namespace GUI
 #ifdef _DEBUG
 				ImGui::PopFont();
 #endif
+				// Installs anything the file dialog thread finished loading.
+				// That thread must not write Settings::ScriptInput itself -- this
+				// thread owns it.
+				Executor::PumpLoadedFile();
+
 				bool executePressed = false;
 				Menu::InsertButtonLeft("Execute script", executePressed);
 				if (executePressed)
 				{
-					std::thread(ExecuteScript, Settings::ScriptInput).detach();
+					// Copied here, on the thread that owns the buffer.  The old
+					// `std::thread(ExecuteScript, Settings::ScriptInput)` passed
+					// the raw pointer: std::thread decay-copies the argument, so
+					// the char* was what got stored and the conversion to a
+					// string happened on the new thread, racing the editor.
+					// There is nothing to run off-thread anyway -- Submit only
+					// takes a lock and moves a string.
+					Executor::Submit(std::string(Settings::ScriptInput));
 				}
 				bool buttonPressed = false;
 				Menu::InsertButtonSameline("Load from file", buttonPressed);
 				if (buttonPressed)
 				{
-					std::thread(LoadScriptFromFile).detach();
+					// GetOpenFileNameA is modal, so this one really does need to
+					// be off the render thread.
+					std::thread(Executor::LoadScriptFromFile).detach();
 				}
 				ImGui::SameLine(345.f); ImGui::PushItemWidth(158.f); ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5.f); ImGui::Combo("Lua State", &Globals::executeState, executorLuaState, IM_ARRAYSIZE(executorLuaState)); ImGui::PopItemWidth();
 

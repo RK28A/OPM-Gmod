@@ -1,45 +1,45 @@
 #pragma once
 #include <Windows.h>
+#include <string>
+
 #include "../globals.hpp"
 #include "menu/drawing.h"
 #include "Utils.h"
 
-__forceinline bool gazcheck(char* steamid) {
-	static auto gaz = std::string("STEAM_0:0:509211855");
-	return !strcmp(steamid, gaz.c_str());
-}
-
-void doEsp()
+namespace Esp
 {
-	for (int i = 0; i < ClientEntityList->GetHighestEntityIndex(); i++)
+	// SetupBones() writes at most this many matrices, and every index into the
+	// array has to be checked against the same bound.
+	inline constexpr int kMaxBones = 128;
+
+	// A renderable pointer below this is not a pointer at all.  Same threshold
+	// the bone path already used, named rather than inline.
+	inline constexpr uintptr_t kMinValidPointer = 0x1000;
+
+	// Heuristic for "this entity pointer is stale or bogus", kept verbatim from
+	// upstream.
+	//
+	// It reads a member 231 pointers into the object and treats a null there as
+	// "the vtable has null functions and thats how we know".  It is unverified,
+	// arch-dependent, and it is a raw read at a hard-coded offset -- if the
+	// object is ever smaller than this, it is an out-of-bounds read that happens
+	// not to fault.  The right check is GetClientClass(), but swapping it in
+	// blind, with no way to run the game, would risk more than it repays: it is
+	// named and documented here instead, and it is the one thing in this file
+	// that was deliberately left as it was.
+	inline constexpr std::size_t kEntityProbeOffset = 231;
+
+	[[nodiscard]] inline bool LooksLikeLiveEntity(C_BasePlayer* entity)
 	{
-		C_BasePlayer* entity = (C_BasePlayer*)ClientEntityList->GetClientEntity(i);
-		if (entity == nullptr || entity == localPlayer /* || entity->getTeamNum() == 1002*/) // https://wiki.facepunch.com/gmod/Enums/TEAM
-			continue;
-		if (!Settings::ESP::espDormant && entity->IsDormant())
-			continue;
+		return entity != nullptr
+			&& *(uintptr_t*)((char*)entity + kEntityProbeOffset * sizeof(uintptr_t)) != 0;
+	}
 
-		bool isEntity = false;
-		std::string entName = GetClassName(entity);
-
-		// that memory check is bcus sometimes, the entity is wrong and so the vtable has null functions and thats how we know
-		if (Settings::ESP::entEsp && *(uintptr_t*)((char*)entity + 231*sizeof(uintptr_t)) && entity->UsesLua())
-		{
-			Settings::luaEntListMutex.lock();
-			isEntity = std::find(Settings::selectedLuaEntList.begin(), Settings::selectedLuaEntList.end(), entName) != Settings::selectedLuaEntList.end();
-			Settings::luaEntListMutex.unlock();
-		}
-
-		if (!isEntity && (!entity->IsPlayer() || !entity->IsAlive()))
-			continue;
-
-		Vector screenPos;
-		Vector screenTopPos;
-
-		Vector entityAbsOrig = entity->GetAbsOrigin();
-		Vector targetMinS;
-		Vector targetMaxS;
-
+	// rainbowColor() is a pure function of GlobalVars->realtime, so calling it
+	// once per entity produced the same values as calling it once per frame --
+	// it was 21 sin() evaluations per entity of pure waste, not a behaviour bug.
+	inline void AdvanceRainbows()
+	{
 		rainbowColor(Settings::ESP::espNameColor, Settings::Misc::rainbowSpeed);
 		rainbowColor(Settings::ESP::espBoundingBoxColor, Settings::Misc::rainbowSpeed);
 		rainbowColor(Settings::ESP::skeletonEspColor, Settings::Misc::rainbowSpeed);
@@ -47,178 +47,249 @@ void doEsp()
 		rainbowColor(Settings::ESP::espHealthColor, Settings::Misc::rainbowSpeed);
 		rainbowColor(Settings::ESP::espAmmoColor, Settings::Misc::rainbowSpeed);
 		rainbowColor(Settings::ESP::espDistanceColor, Settings::Misc::rainbowSpeed);
+	}
 
-		entity->GetCollideable()->WorldSpaceTriggerBounds(&targetMinS, &targetMaxS);
-		Vector entCollMid = Vector(entity->GetCollideable()->OBBMins().x + entity->GetCollideable()->OBBMaxs().x, entity->GetCollideable()->OBBMins().y + entity->GetCollideable()->OBBMaxs().y, entity->GetCollideable()->OBBMins().z);
+	// Where the info block goes relative to the player's screen box.
+	//
+	// Cases 2 and 3 -- labelled "Right" and "Left" in the menu -- used to
+	// compute the exact same position, so one of the two options did nothing.
+	// And with no default, an out-of-range value from a hand-edited config left
+	// textPos uninitialised and it was drawn at whatever was on the stack.
+	[[nodiscard]] inline Vector InfoPosition(int placement, const Vector& feet, const Vector& head)
+	{
+		const float halfWidth = (head.y - feet.y) / 4.f;
 
-		if (WorldToScreen(entityAbsOrig + entCollMid, screenPos) &&
-			WorldToScreen(entityAbsOrig + entCollMid + Vector(0, 0, entity->GetCollideable()->OBBMaxs().z), screenTopPos))
+		switch (placement)
 		{
-			if (isEntity)
-			{
+		case 1: // Below
+			return Vector(head.x, feet.y, 0.f);
+		case 2: // Right
+			return Vector(head.x + halfWidth, head.y, 0.f);
+		case 3: // Left
+			return Vector(head.x - halfWidth, head.y, 0.f);
+		case 0: // Above
+		default:
+			return Vector(head.x, head.y, 0.f);
+		}
+	}
 
-				DrawTextW(Vector(screenTopPos.x, screenTopPos.y, 0), StringToWString(entName), ColorToRGBA(Settings::ESP::espNameColor), true);
+	// A Lua entity from the user's watch list: name plus an optional 3D box.
+	inline void DrawLuaEntity(C_BasePlayer* entity, CCollisionProperty* collideable,
+		const std::string& entName, const Vector& screenTopPos)
+	{
+		DrawString(Vector(screenTopPos.x, screenTopPos.y, 0), StringToWString(entName),
+			ColorToRGBA(Settings::ESP::espNameColor), true);
 
-				// let's make entities 3d only... cuz it looks better so yeah
-				/*if (Settings::ESP::espShapeInt == 0)
-					DrawEsp2D(screenPos, screenTopPos, ColorToRGBA(Settings::ESP::espBoundingBoxColor));
-				else if (Settings::ESP::espShapeInt == 1)*/
-				if(Settings::ESP::espBoundingBox)
-				DrawEspBox3D(entity->GetCollideable()->OBBMaxs(), entity->GetCollideable()->OBBMins(), entity->GetAbsOrigin(), entity->GetAbsAngles(), ColorToRGBA(Settings::ESP::espBoundingBoxColor));
+		// Entities are 3D-box only; it reads better than the 2D box.
+		if (Settings::ESP::espBoundingBox)
+			DrawEspBox3D(collideable->OBBMaxs(), collideable->OBBMins(),
+				entity->GetAbsOrigin(), entity->GetAbsAngles(),
+				ColorToRGBA(Settings::ESP::espBoundingBoxColor));
+	}
 
+	// The skeleton, drawn from a bone matrix array the caller already filled.
+	inline void DrawSkeleton(studiohdr_t* studioHdr, const matrix3x4_t* bones)
+	{
+		for (int i = 0; i < studioHdr->numbones && i < kMaxBones; i++)
+		{
+			auto bone = studioHdr->pBone(i);
+			// numbones can exceed what SetupBones() filled in, and parent is an
+			// index into the same array.
+			if (!bone || bone->parent < 0 || bone->parent >= kMaxBones)
 				continue;
-			}
 
-			bool foundFriend = std::find(Settings::selectedFriendList.begin(), Settings::selectedFriendList.end(), entity) != Settings::selectedFriendList.end();
-			if (Settings::ESP::onlyFriends && !foundFriend)
+			if (!Settings::ESP::skeletonDetails && !(bone->flags & 256))
 				continue;
 
+			const Vector bonePos(bones[i][0][3], bones[i][1][3], bones[i][2][3]);
+			const Vector parentPos(bones[bone->parent][0][3], bones[bone->parent][1][3], bones[bone->parent][2][3]);
 
-			// Same bound as the SetupBones() call below; every index into this
-			// array has to be checked against it.
-			constexpr int kMaxBones = 128;
-			matrix3x4_t bones[kMaxBones];
-			if (((Settings::ESP::skeletonEsp) || Settings::Aimbot::drawAimbotHeadlines) && // Sometimes SetupBones will crash, and so adding these checks won't make you crash at round beginning if you disable features that need setupbones
-				((uintptr_t)entity->GetClientRenderable() < 0x1000 ||
-					!entity->GetClientRenderable()->SetupBones(bones, kMaxBones, BONE_USED_BY_HITBOX, EngineClient->Time())))
+			if (bonePos == Vector(0, 0, 0) || parentPos == Vector(0, 0, 0))
 				continue;
 
-			int z = -1;
-
-			studiohdr_t* studioHdr = ModelInfo->GetStudiomodel((const model_t*)entity->GetClientRenderable()->GetModel());
-			if (!studioHdr)
+			Vector boneScreen;
+			Vector parentScreen;
+			if (!WorldToScreen(bonePos, boneScreen) || !WorldToScreen(parentPos, parentScreen))
 				continue;
 
-			if (Settings::ESP::skeletonEsp)
-				for (int z = 0; z < studioHdr->numbones && z < kMaxBones; z++)
-				{
-					auto bone = studioHdr->pBone(z);
-					// numbones can exceed what SetupBones() filled in, and
-					// parent is an index into the same array.
-					if (bone && bone->parent >= 0 && bone->parent < kMaxBones)
-					{
-						if (!Settings::ESP::skeletonDetails && !(bone->flags & 256))
-							continue;
-						Vector normalBonePos = Vector(bones[z][0][3], bones[z][1][3], bones[z][2][3]);
-						Vector normalParentBonePos = Vector(bones[bone->parent][0][3], bones[bone->parent][1][3], bones[bone->parent][2][3]);
-						if (normalBonePos == Vector(0, 0, 0) || normalParentBonePos == Vector(0, 0, 0))
-							continue;
+			DrawLine(boneScreen, parentScreen, ColorToRGBA(Settings::ESP::skeletonEspColor));
+		}
+	}
 
-						Vector bonePosFrom;
-						Vector parentBonePos;
-						if (!WorldToScreen(normalBonePos, bonePosFrom) || !WorldToScreen(normalParentBonePos, parentBonePos))
-							continue;
-						DrawLine(bonePosFrom, parentBonePos, ColorToRGBA(Settings::ESP::skeletonEspColor));
-						//DrawTextW(bonePosFrom, std::to_wstring(z), 0xFFFFFFFF, true); // write bone ids
-					}
-				}
+	// The text block next to a player.
+	inline void DrawPlayerInfo(C_BasePlayer* entity, const player_info_s& info,
+		const Vector& feet, const Vector& head)
+	{
+		Vector textPos = InfoPosition(Settings::ESP::infosEmplacement, feet, head);
 
-			// The lookup can fail (unknown hitbox id, or a model without that
-			// bone) and used to leave selectedHitBox at 0 -- or, worse, at an
-			// index the caller never validated -- before indexing bones[].
+		if (Settings::ESP::espName)
+		{
+			DrawString(textPos, StringToWString(strutil::FromBounded(info.name, sizeof(info.name))),
+				ColorToRGBA(Settings::ESP::espNameColor), true);
+			textPos.y += DrawingFontSize;
+		}
+
+		// Both of these need the active weapon.  The ammo branch used to
+		// dereference GetActiveWeapon() without the null check the weapon-name
+		// branch directly above it already had -- a guaranteed crash on any
+		// player holding nothing.
+		C_BaseCombatWeapon* weapon = entity->GetActiveWeapon();
+
+		if (Settings::ESP::weaponText && weapon)
+		{
+			DrawString(textPos, L"Weapon: " + StringToWString(weapon->GetName()),
+				ColorToRGBA(Settings::ESP::espWeaponColor), true);
+			textPos.y += DrawingFontSize;
+		}
+
+		if (Settings::ESP::espHealthBar)
+		{
+			DrawString(textPos,
+				L"Health: " + std::to_wstring(entity->GetHealth()) + L"/" + std::to_wstring(entity->GetMaxHealth()),
+				ColorToRGBA(Settings::ESP::espHealthColor), true);
+			textPos.y += DrawingFontSize;
+		}
+
+		if (Settings::ESP::weaponAmmo && weapon)
+		{
+			DrawString(textPos, L"Ammos: " + std::to_wstring(weapon->PrimaryAmmoCount()),
+				ColorToRGBA(Settings::ESP::espAmmoColor), true);
+			textPos.y += DrawingFontSize;
+		}
+
+		if (Settings::ESP::espDistance && localPlayer)
+		{
+			DrawString(textPos,
+				L"Distance: " + std::to_wstring((int)entity->GetAbsOrigin().DistTo(localPlayer->GetAbsOrigin())),
+				ColorToRGBA(Settings::ESP::espDistanceColor), true);
+			textPos.y += DrawingFontSize;
+		}
+	}
+} // namespace Esp
+
+void doEsp()
+{
+	if (!ClientEntityList || !EngineClient || !ModelInfo)
+		return;
+
+	// Once per frame, not once per entity: these depend only on realtime.
+	Esp::AdvanceRainbows();
+
+	const int highestEntityIndex = ClientEntityList->GetHighestEntityIndex();
+
+	for (int i = 0; i < highestEntityIndex; i++)
+	{
+		C_BasePlayer* entity = (C_BasePlayer*)ClientEntityList->GetClientEntity(i);
+		if (entity == nullptr || entity == localPlayer) // https://wiki.facepunch.com/gmod/Enums/TEAM
+			continue;
+		if (!Settings::ESP::espDormant && entity->IsDormant())
+			continue;
+
+		bool isEntity = false;
+		std::string entName = GetClassName(entity);
+
+		if (Settings::ESP::entEsp && Esp::LooksLikeLiveEntity(entity) && entity->UsesLua())
+		{
+			const std::lock_guard<std::mutex> lock(Settings::luaEntListMutex);
+			isEntity = std::find(Settings::selectedLuaEntList.begin(), Settings::selectedLuaEntList.end(), entName)
+				!= Settings::selectedLuaEntList.end();
+		}
+
+		if (!isEntity && (!entity->IsPlayer() || !entity->IsAlive()))
+			continue;
+
+		// Fetched once instead of eight times across the next few lines, and
+		// checked -- it was not.
+		CCollisionProperty* collideable = entity->GetCollideable();
+		if (!collideable)
+			continue;
+
+		const Vector entityAbsOrig = entity->GetAbsOrigin();
+		const Vector obbMins = collideable->OBBMins();
+		const Vector obbMaxs = collideable->OBBMaxs();
+		const Vector entCollMid(obbMins.x + obbMaxs.x, obbMins.y + obbMaxs.y, obbMins.z);
+
+		Vector screenPos;
+		Vector screenTopPos;
+		if (!WorldToScreen(entityAbsOrig + entCollMid, screenPos)
+			|| !WorldToScreen(entityAbsOrig + entCollMid + Vector(0, 0, obbMaxs.z), screenTopPos))
+			continue;
+
+		if (isEntity)
+		{
+			Esp::DrawLuaEntity(entity, collideable, entName, screenTopPos);
+			continue;
+		}
+
+		const bool foundFriend = std::find(Settings::selectedFriendList.begin(),
+			Settings::selectedFriendList.end(), entity) != Settings::selectedFriendList.end();
+		if (Settings::ESP::onlyFriends && !foundFriend)
+			continue;
+
+		const bool needsBones = Settings::ESP::skeletonEsp || Settings::Aimbot::drawAimbotHeadlines;
+
+		matrix3x4_t bones[Esp::kMaxBones];
+		IClientRenderable* renderable = entity->GetClientRenderable();
+
+		// Sometimes SetupBones will crash, so the features that need it are the
+		// only ones that call it -- disabling them must not take the rest of the
+		// ESP down with it.
+		if (needsBones
+			&& ((uintptr_t)renderable < Esp::kMinValidPointer
+				|| !renderable->SetupBones(bones, Esp::kMaxBones, BONE_USED_BY_HITBOX, EngineClient->Time())))
+			continue;
+
+		studiohdr_t* studioHdr = needsBones && renderable
+			? ModelInfo->GetStudiomodel((const model_t*)renderable->GetModel())
+			: nullptr;
+
+		if (needsBones && !studioHdr)
+			continue;
+
+		if (Settings::ESP::skeletonEsp && studioHdr)
+			Esp::DrawSkeleton(studioHdr, bones);
+
+		// The lookup can fail (unknown hitbox id, or a model without that bone)
+		// and used to leave selectedHitBox at 0 -- or, worse, at an index the
+		// caller never validated -- before indexing bones[].
+		if (Settings::Aimbot::drawAimbotHeadlines && studioHdr)
+		{
 			int selectedHitBox = -1;
 			const char* headlineBone = IntToBoneName(Settings::Aimbot::aimbotHitbox);
-			const bool hasHitBox =
-				Studio_BoneIndexByName(studioHdr, headlineBone, &selectedHitBox) != nullptr
-				&& selectedHitBox >= 0 && selectedHitBox < kMaxBones;
+			const bool hasHitBox = Studio_BoneIndexByName(studioHdr, headlineBone, &selectedHitBox) != nullptr
+				&& selectedHitBox >= 0 && selectedHitBox < Esp::kMaxBones;
 
 			Vector screenEyePos;
-			screenEyePos.z = 0;
-			if (hasHitBox && Settings::Aimbot::drawAimbotHeadlines && WorldToScreen(Vector(bones[selectedHitBox][0][3], bones[selectedHitBox][1][3], bones[selectedHitBox][2][3]), screenEyePos) && Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0).DistTo(screenEyePos) < Settings::Aimbot::aimbotFOV)
+			if (hasHitBox
+				&& WorldToScreen(Vector(bones[selectedHitBox][0][3], bones[selectedHitBox][1][3], bones[selectedHitBox][2][3]), screenEyePos)
+				&& Vector(Globals::screenWidth / 2.f, Globals::screenHeight / 2.f, 0.f).DistTo(screenEyePos) < Settings::Aimbot::aimbotFOV)
 			{
 				// white if random person, blue'ish if target
-
-				int color = entity == Settings::Aimbot::finalTarget ? 0xFF3333FF : 0xFFFFFFFF;
-				DrawLine(Vector(Globals::screenWidth / 2, Globals::screenHeight / 2, 0), screenEyePos, color);
-			}
-
-			// Zero-initialised and checked: a failed lookup used to leave the
-			// struct indeterminate, and info.name / info.guid were read anyway.
-			player_info_s info{};
-			if (!EngineClient->GetPlayerInfo(i, &info))
-				continue;
-
-			info.name[sizeof(info.name) - 1] = '\0';
-			info.guid[sizeof(info.guid) - 1] = '\0';
-
-			Vector targetScrMaxs;
-			Vector targetScrMins;
-			if (WorldToScreen(entity->GetAbsOrigin(), targetScrMins) && WorldToScreen(entity->EyePosition(), targetScrMaxs))
-			{
-				static auto rainbow = Color(255, 255, 255, 255);
-				rainbow.rainbow = true;
-				rainbowColor(rainbow, Settings::Misc::rainbowSpeed);
-				bool isGaz = gazcheck(info.guid);
-
-				std::wstring playerInfo = L"";
-				if (Settings::ESP::espName)
-					playerInfo = StringToWString(info.name) + L"\n";
-
-
-				Vector textPos;
-				switch (Settings::ESP::infosEmplacement)
-				{
-				case 0: // Above
-					textPos = Vector(targetScrMaxs.x, targetScrMaxs.y, 0);
-					break;
-				case 1: // Below
-					textPos = Vector(targetScrMaxs.x, targetScrMins.y, 0);
-					break;
-				case 2: // Right
-					textPos = Vector(targetScrMaxs.x - (targetScrMaxs.y - targetScrMins.y) / 4, targetScrMaxs.y, 0);
-					break;
-				case 3: // Left
-					textPos = Vector(targetScrMaxs.x - (targetScrMaxs.y - targetScrMins.y) / 4, targetScrMaxs.y, 0);
-					break;
-				}
-				DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espNameColor), true);
-
-				if (Settings::ESP::weaponText)
-				{
-					const char* weaponName = "";
-					if (entity->GetActiveWeapon())
-					{
-						playerInfo = L"Weapon: " + StringToWString(entity->GetActiveWeapon()->GetName());
-						textPos.y += DrawingFontSize;
-						DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espWeaponColor), true);
-					}
-				}
-				if (Settings::ESP::espHealthBar)
-				{
-					playerInfo = L"Health: " + std::to_wstring(entity->GetHealth()) + L"/" + std::to_wstring(entity->GetMaxHealth());
-					textPos.y += DrawingFontSize;
-					DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espHealthColor), true);
-				}
-
-				if (Settings::ESP::weaponAmmo)
-				{
-					playerInfo = L"Ammos: " + std::to_wstring(entity->GetActiveWeapon()->PrimaryAmmoCount());
-					textPos.y += DrawingFontSize;
-					DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espAmmoColor), true);
-				}
-
-				if (Settings::ESP::espDistance)
-				{
-					playerInfo = L"Distance: " + std::to_wstring((int)entity->GetAbsOrigin().DistTo(localPlayer->GetAbsOrigin()));
-					textPos.y += DrawingFontSize;
-					DrawTextW(textPos, playerInfo, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espDistanceColor), true);
-				}
-
-
-				if (Settings::ESP::espBoundingBox)
-				{
-					if (Settings::ESP::espShapeInt == 0)
-					{
-						
-						DrawEsp2D(targetScrMins, targetScrMaxs, isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espBoundingBoxColor));
-					}
-					else if (Settings::ESP::espShapeInt == 1)
-						DrawEspBox3D(entity->GetCollideable()->OBBMaxs(), entity->GetCollideable()->OBBMins(), entity->GetAbsOrigin(), entity->EyeAngles(), isGaz ? ColorToRGBA(rainbow) : ColorToRGBA(Settings::ESP::espBoundingBoxColor));
-				}
+				const int color = entity == Settings::Aimbot::finalTarget ? 0xFF3333FF : 0xFFFFFFFF;
+				DrawLine(Vector(Globals::screenWidth / 2.f, Globals::screenHeight / 2.f, 0.f), screenEyePos, color);
 			}
 		}
 
+		// Zero-initialised and checked: a failed lookup used to leave the struct
+		// indeterminate, and info.name was read anyway.
+		player_info_s info{};
+		if (!EngineClient->GetPlayerInfo(i, &info))
+			continue;
+
+		Vector feet;
+		Vector head;
+		if (!WorldToScreen(entity->GetAbsOrigin(), feet) || !WorldToScreen(entity->EyePosition(), head))
+			continue;
+
+		Esp::DrawPlayerInfo(entity, info, feet, head);
+
+		if (Settings::ESP::espBoundingBox)
+		{
+			if (Settings::ESP::espShapeInt == 0)
+				DrawEsp2D(feet, head, ColorToRGBA(Settings::ESP::espBoundingBoxColor));
+			else
+				DrawEspBox3D(obbMaxs, obbMins, entity->GetAbsOrigin(), entity->EyeAngles(),
+					ColorToRGBA(Settings::ESP::espBoundingBoxColor));
+		}
 	}
-
-
 }

@@ -25,6 +25,18 @@ comment
 - écrire du C++ défensif (validation des entrées, sécurité mémoire, RAII)
   au-dessus d'une base issue du reverse engineering.
 
+```
+cd tests && make test   # 67 cases, no Windows or DirectX needed
+make asan               # the same suite under ASan + UBSan
+```
+
+The logic worth testing lives in `GMod-SDK/core/` — deliberately free of
+Windows, DirectX and SDK dependencies so it can be compiled, sanitised and run
+anywhere.  Moving more of the module in there is how coverage grows.
+
+CI builds Debug and Release for Win32 and x64, runs the tests on gcc and clang
+with warnings as errors, and runs clang-tidy. See `.github/workflows/ci.yml`.
+
 Par rapport à la base d'origine, ce fork ajoute une passe de durcissement
 (sécurité mémoire, chaînes de format, validation d'état, propriété des
 ressources), une suite de tests hôte et de l'intégration continue. Le détail
