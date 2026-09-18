@@ -86,8 +86,10 @@ static void** GetD3D9DeviceVTable()
     wc.lpszClassName = "GmodSdkD3DProbe";
     RegisterClassExA(&wc); // harmless if already registered from a prior probe
 
+    // Never shown; given a real (non-zero) size anyway so no HAL driver balks at
+    // the focus window.
     HWND hwnd = CreateWindowExA(0, wc.lpszClassName, "", WS_OVERLAPPED,
-        0, 0, 1, 1, nullptr, nullptr, wc.hInstance, nullptr);
+        0, 0, 640, 480, nullptr, nullptr, wc.hInstance, nullptr);
 
     // Explicit back-buffer size and a format taken from the adapter's current
     // display mode. A 1x1 WS_OVERLAPPED window has a 0x0 client area, so leaving
@@ -107,27 +109,31 @@ static void** GetD3D9DeviceVTable()
     pp.BackBufferFormat = dm.Format;
 
     IDirect3DDevice9* device = nullptr;
-    // The vtable is identical whichever way the device is made, so if hardware
-    // T&L or the HAL is unavailable for this throwaway device, fall back rather
-    // than give up the whole hook.
+    // HAL only. Every HAL IDirect3DDevice9 from this d3d9.dll shares one vtable
+    // -- the same one the game's device uses -- which is exactly what we must
+    // patch. A REF device's vtable lives in d3dref9.dll: it is a *different*
+    // table (so patching it would not touch the game), and d3dref9 unloads when
+    // the probe is released, leaving a dangling pointer that reads as
+    // "unreadable". So REF is deliberately not a fallback; only the T&L flag is
+    // retried.
     HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
         D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
     if (FAILED(hr))
         hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
             D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
-    if (FAILED(hr))
-        hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_REF, hwnd,
-            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
 
     void** vtable = nullptr;
     if (SUCCEEDED(hr) && device)
     {
         vtable = *reinterpret_cast<void***>(device);
+        DBG_INFO("Present probe: HAL device %p, vtable %p, Present(vtable[17]) %p",
+            (void*)device, (void*)vtable, vtable ? vtable[17] : nullptr);
         device->Release();
     }
     else
     {
-        DBG_ERROR("Probe CreateDevice failed (0x%08lX); cannot resolve the Present vtable",
+        DBG_ERROR("Probe CreateDevice failed (0x%08lX); the game is likely in "
+            "exclusive fullscreen -- try borderless/windowed",
             static_cast<unsigned long>(hr));
     }
 
