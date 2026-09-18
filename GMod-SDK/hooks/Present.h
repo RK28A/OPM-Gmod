@@ -197,12 +197,18 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 	static bool initialized = false;
 	if (!initialized)
 	{
+		// Step logging: on a wrapped d3d9 (heap vtable) the first-call init has
+		// been crashing with no catchable exception, so each DBG_INFO (flushed to
+		// disk immediately) leaves the last-reached step as the final log line.
+		DBG_INFO("hkPresent: first call, device=%p", (void*)pDevice);
 		EngineClient->GetScreenSize(Globals::screenWidth, Globals::screenHeight);
+		DBG_INFO("hkPresent init: InitRenderer");
 		InitRenderer(pDevice);
 
 		ImGui::CreateContext();
 
 		Globals::window = FindWindowA("Valve001", nullptr);
+		DBG_INFO("hkPresent init: window=%p", (void*)Globals::window);
 		Globals::oWndProc = (WNDPROC)SetWindowLongPtrA(Globals::window, GWL_WNDPROC, (LONG_PTR)WndProc);
 
 		IDirect3DSwapChain9* pChain = nullptr;
@@ -216,14 +222,17 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 			pChain->Release(); // GetSwapChain AddRefs; this reference was leaked
 		}
 
+		DBG_INFO("hkPresent init: ImGui backend init");
 		ImGui_ImplWin32_Init(Globals::window);
 		ImGui_ImplDX9_Init(pDevice);
 
+		DBG_INFO("hkPresent init: menu background (fmt=%d)", (int)pp.BackBufferFormat);
 		CreateMenuBackground(pDevice, pp.BackBufferFormat);
 
 		// Installed here rather than in Main(): the device only exists once the
 		// game has reached its first Present.  RestoreVMTHooks() takes it back
 		// on unload like every other vtable hook.
+		DBG_INFO("hkPresent init: Reset hook (device vtable index 16)");
 		oReset = VMTHook<_Reset>((PVOID**)pDevice, (PVOID)hkReset, 16);
 
 		style = &ImGui::GetStyle();
@@ -237,6 +246,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 		// came from the allocator, on every atlas rebuild (a DX9 device reset,
 		// among others).  The bytes outlive the atlas, so the atlas must not own
 		// them.
+		DBG_INFO("hkPresent init: fonts");
 		ImFontConfig staticFontCfg;
 		staticFontCfg.FontDataOwnedByAtlas = false;
 
@@ -259,6 +269,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 		executorFont = io.Fonts->AddFontFromMemoryTTF((void*)verdanaBytes, sizeof(verdanaBytes), 14.f, &staticFontCfg);
 #endif
 
+		DBG_INFO("hkPresent init: complete");
 		initialized = true;
 	}
 
@@ -290,6 +301,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 
 	ImGui::GetIO().MouseDrawCursor = Globals::openMenu;
 
+	{ static bool once = false; if (!once) { once = true; DBG_INFO("hkPresent frame1: NewFrame"); } }
 	ImGui_ImplDX9_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();
@@ -358,6 +370,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 		}
 	}
 
+	{ static bool once = false; if (!once) { once = true; DBG_INFO("hkPresent frame1: doEsp"); } }
 	doEsp();
 	doAdminEsp(); // separate admin overlay; no-op unless Settings::ESP::adminEsp
 #ifdef _DEBUG
@@ -494,6 +507,7 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 	localPlayer = (C_BasePlayer*)ClientEntityList->GetClientEntity(EngineClient->GetLocalPlayer());
 	SpectatorList();
 
+	{ static bool once = false; if (!once) { once = true; DBG_INFO("hkPresent frame1: Render + RenderDrawData"); } }
 	ImGui::EndFrame();
 	ImGui::Render();
 	ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
@@ -521,5 +535,6 @@ HRESULT __stdcall hkPresent(IDirect3DDevice9* pDevice, CONST RECT* pSourceRect, 
 	if (Globals::pendingUnload.exchange(false))
 		PerformUnload();
 
+	{ static bool once = false; if (!once) { once = true; DBG_INFO("hkPresent frame1: calling oPresent %p", (void*)presentToCall); } }
 	return presentToCall(pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
 }
