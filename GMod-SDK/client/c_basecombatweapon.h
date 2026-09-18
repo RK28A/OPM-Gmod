@@ -600,10 +600,10 @@ public:
 	/*506*/	virtual void* WasDropped(void) = 0;
 	/*507*/	virtual void* MarkAsDropped(void) = 0;
 
-	int PrimaryAmmoCount() { 
-		if (!this) return 0; 
+	int PrimaryAmmoCount() {
+		if (!this) return 0;
 #ifdef _WIN64
-		return *(int*)((uintptr_t)this + 0x1C48);
+		return *(int*)((uintptr_t)this + 0x1C50); // m_iClip1 (DT_LocalWeaponData)
 #else
 		return *(int*)((uintptr_t)this + 0x1818); // m_iClip1
 #endif
@@ -611,7 +611,7 @@ public:
 	int SecondaryAmmoCount() {
 		if (!this) return 0;
 #ifdef _WIN64
-		return *(int*)((uintptr_t)this + 0x1C4C);
+		return *(int*)((uintptr_t)this + 0x1C54); // m_iClip2 (DT_LocalWeaponData)
 #else
 		return *(int*)((uintptr_t)this + 0x181C); // m_iClip2
 #endif
@@ -619,7 +619,7 @@ public:
 	float NextPrimaryAttack() {
 		if (!this) return 0;
 #ifdef _WIN64
-		return *(float*)((uintptr_t)this + 0x1BFC);
+		return *(float*)((uintptr_t)this + 0x1C04); // m_flNextPrimaryAttack (DT_LocalActiveWeaponData)
 #else
 		return *(float*)((uintptr_t)this + 0x17D4); // m_flNextPrimaryAttack
 #endif
@@ -627,7 +627,7 @@ public:
 	float NextSecondaryAttack() {
 		if (!this) return 0;
 #ifdef _WIN64
-		return *(float*)((uintptr_t)this + 0x1C00);
+		return *(float*)((uintptr_t)this + 0x1C08); // m_flNextSecondaryAttack (DT_LocalActiveWeaponData)
 #else
 		return *(float*)((uintptr_t)this + 0x17D4); // m_flNextSecondaryAttack
 #endif

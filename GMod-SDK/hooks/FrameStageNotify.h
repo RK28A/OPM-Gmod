@@ -22,7 +22,10 @@ ClientFrameStage_t stage)
 	localPlayer = (C_BasePlayer*)ClientEntityList->GetClientEntity(EngineClient->GetLocalPlayer());
 
 	static ConVar* fullbrightCvar = CVar->FindVar("mat_fullbright");
-	if (fullbrightCvar && fullbrightCvar->intValue != Settings::Visuals::fullBright) {
+	// static_cast around the bool: intValue is int32_t, and comparing them
+	// directly triggers C4805 (unsafe mix of int and bool).  The value 0/1 is
+	// exactly what SetValue below will store anyway.
+	if (fullbrightCvar && fullbrightCvar->intValue != static_cast<int>(Settings::Visuals::fullBright)) {
 		if (Settings::Visuals::fullBright)
 			fullbrightCvar->RemoveFlags(FCVAR_CHEAT);
 		else fullbrightCvar->AddFlags(FCVAR_CHEAT);
@@ -38,10 +41,12 @@ ClientFrameStage_t stage)
 	if (Settings::Misc::svCheats)
 		ConVarSpoofing::Acquire(ConVarSpoofing::cheats, "sv_cheats");
 
-	if (ConVarSpoofing::allowCsLua && ConVarSpoofing::allowCsLua->m_pOriginalCVar->intValue != Settings::Misc::svAllowCsLua)
+	// static_cast<int>: intValue is int32_t and the settings are bool -- see
+	// the note above the fullbright check.
+	if (ConVarSpoofing::allowCsLua && ConVarSpoofing::allowCsLua->m_pOriginalCVar->intValue != static_cast<int>(Settings::Misc::svAllowCsLua))
 		ConVarSpoofing::allowCsLua->m_pOriginalCVar->SetValue(Settings::Misc::svAllowCsLua);
 
-	if (ConVarSpoofing::cheats && ConVarSpoofing::cheats->m_pOriginalCVar->intValue != Settings::Misc::svCheats)
+	if (ConVarSpoofing::cheats && ConVarSpoofing::cheats->m_pOriginalCVar->intValue != static_cast<int>(Settings::Misc::svCheats))
 		ConVarSpoofing::cheats->m_pOriginalCVar->SetValue(Settings::Misc::svCheats);
 
 	//Input->cameraoffset

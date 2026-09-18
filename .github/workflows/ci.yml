@@ -77,7 +77,7 @@ jobs:
 
       - name: Restore D3DX9
         if: steps.dxsdk-cache.outputs.cache-hit != 'true'
-        run: nuget install Microsoft.DXSDK.D3DX -Version 9.29.952.8 -OutputDirectory packages -ExcludeVersion:false
+        run: nuget install Microsoft.DXSDK.D3DX -Version 9.29.952.8 -OutputDirectory packages
 
       - name: Build
         run: >

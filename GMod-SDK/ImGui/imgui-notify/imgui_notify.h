@@ -107,7 +107,10 @@ namespace ImGui
 		// Derived from the actual display size rather than Globals::screenWidth,
 		// which is only set once the game reports a resolution.
 		float wrap_width = io.DisplaySize.x / 3.f;
-		wrap_width = std::max(notify_detail::kMinWrapWidth, std::min(notify_detail::kMaxWrapWidth, wrap_width));
+		// std::clamp, not std::max(std::min(...)): <Windows.h>'s min()/max()
+		// macros are live in this translation unit and would break a bare
+		// std::min/std::max (MSVC C2589).  clamp has no colliding macro.
+		wrap_width = std::clamp(wrap_width, notify_detail::kMinWrapWidth, notify_detail::kMaxWrapWidth);
 
 		float height = 0.f;
 
