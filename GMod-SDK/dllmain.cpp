@@ -89,14 +89,35 @@ static void** GetD3D9DeviceVTable()
     HWND hwnd = CreateWindowExA(0, wc.lpszClassName, "", WS_OVERLAPPED,
         0, 0, 1, 1, nullptr, nullptr, wc.hInstance, nullptr);
 
+    // Explicit back-buffer size and a format taken from the adapter's current
+    // display mode. A 1x1 WS_OVERLAPPED window has a 0x0 client area, so leaving
+    // these zero makes the runtime derive a 0x0 back buffer and CreateDevice
+    // fails with E_INVALIDARG (0x80070057) -- which is exactly what happened.
+    D3DDISPLAYMODE dm = {};
+    if (FAILED(d3d->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &dm)))
+        dm.Format = D3DFMT_X8R8G8B8;
+
     D3DPRESENT_PARAMETERS pp = {};
     pp.Windowed = TRUE;
     pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
     pp.hDeviceWindow = hwnd;
+    pp.BackBufferWidth = 2;
+    pp.BackBufferHeight = 2;
+    pp.BackBufferCount = 1;
+    pp.BackBufferFormat = dm.Format;
 
     IDirect3DDevice9* device = nullptr;
-    const HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
+    // The vtable is identical whichever way the device is made, so if hardware
+    // T&L or the HAL is unavailable for this throwaway device, fall back rather
+    // than give up the whole hook.
+    HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
         D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+        hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
+            D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+        hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_REF, hwnd,
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
 
     void** vtable = nullptr;
     if (SUCCEEDED(hr) && device)
