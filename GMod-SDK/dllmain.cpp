@@ -91,22 +91,17 @@ static void** GetD3D9DeviceVTable()
     HWND hwnd = CreateWindowExA(0, wc.lpszClassName, "", WS_OVERLAPPED,
         0, 0, 640, 480, nullptr, nullptr, wc.hInstance, nullptr);
 
-    // Explicit back-buffer size and a format taken from the adapter's current
-    // display mode. A 1x1 WS_OVERLAPPED window has a 0x0 client area, so leaving
-    // these zero makes the runtime derive a 0x0 back buffer and CreateDevice
-    // fails with E_INVALIDARG (0x80070057) -- which is exactly what happened.
-    D3DDISPLAYMODE dm = {};
-    if (FAILED(d3d->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &dm)))
-        dm.Format = D3DFMT_X8R8G8B8;
-
+    // Let the runtime choose the back-buffer format (D3DFMT_UNKNOWN) and derive
+    // its size from the window's client area (fields left zero). Forcing the
+    // adapter's *display* format here made HAL reject it as a windowed
+    // back-buffer on 10-bit/HDR desktops, so HAL failed and only a (wrong,
+    // unmappable) REF device was created. This is the proven kiero config; it
+    // relies on the probe window having a real client area, hence 640x480 above.
     D3DPRESENT_PARAMETERS pp = {};
     pp.Windowed = TRUE;
     pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
     pp.hDeviceWindow = hwnd;
-    pp.BackBufferWidth = 2;
-    pp.BackBufferHeight = 2;
-    pp.BackBufferCount = 1;
-    pp.BackBufferFormat = dm.Format;
+    pp.BackBufferFormat = D3DFMT_UNKNOWN;
 
     IDirect3DDevice9* device = nullptr;
     // HAL only. Every HAL IDirect3DDevice9 from this d3d9.dll shares one vtable
