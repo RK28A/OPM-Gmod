@@ -2,6 +2,11 @@
 
 #include "../globals.hpp"
 #include "../client/usercmd.h"
+
+// PollKey lives here.  This header used to rely on dllmain.cpp including
+// CreateMove.h (and through it Utils.h) first -- the single-translation-unit
+// build hides a missing include until the day the order changes.
+#include "../hacks/Utils.h"
 #include <Windows.h>
 
 typedef void(__thiscall* _FrameStageNotify)(CHLClient*, ClientFrameStage_t);
@@ -17,22 +22,32 @@ ClientFrameStage_t stage)
 	localPlayer = (C_BasePlayer*)ClientEntityList->GetClientEntity(EngineClient->GetLocalPlayer());
 
 	static ConVar* fullbrightCvar = CVar->FindVar("mat_fullbright");
-	if (fullbrightCvar && fullbrightCvar->intValue != Settings::Visuals::fullBright) {
+	// static_cast around the bool: intValue is int32_t, and comparing them
+	// directly triggers C4805 (unsafe mix of int and bool).  The value 0/1 is
+	// exactly what SetValue below will store anyway.
+	if (fullbrightCvar && fullbrightCvar->intValue != static_cast<int>(Settings::Visuals::fullBright)) {
 		if (Settings::Visuals::fullBright)
 			fullbrightCvar->RemoveFlags(FCVAR_CHEAT);
 		else fullbrightCvar->AddFlags(FCVAR_CHEAT);
 		fullbrightCvar->SetValue(Settings::Visuals::fullBright);
 	}
-	if (Settings::Misc::svAllowCsLua && !spoofedAllowCsLua) {
-		spoofedAllowCsLua = new SpoofedConVar(CVar->FindVar("sv_allowcslua"));
-		spoofedAllowCsLua->m_pOriginalCVar->DisableCallback();
-	}if (Settings::Misc::svCheats && !spoofedCheats) {
-		spoofedCheats = new SpoofedConVar(CVar->FindVar("sv_cheats"));
-		spoofedCheats->m_pOriginalCVar->DisableCallback();
-	}
+	// Acquire() is idempotent and owns the instance, so this no longer leaks a
+	// raw `new` into a global that nothing frees.  It also copes with FindVar()
+	// returning null, which used to build a SpoofedConVar around nullptr and
+	// then dereference it on the very next line.
+	if (Settings::Misc::svAllowCsLua)
+		ConVarSpoofing::Acquire(ConVarSpoofing::allowCsLua, "sv_allowcslua");
 
-	if (spoofedAllowCsLua && spoofedAllowCsLua->m_pOriginalCVar->intValue != Settings::Misc::svAllowCsLua) spoofedAllowCsLua->m_pOriginalCVar->SetValue(Settings::Misc::svAllowCsLua);
-	if (spoofedCheats && spoofedCheats->m_pOriginalCVar->intValue != Settings::Misc::svCheats) spoofedCheats->m_pOriginalCVar->SetValue(Settings::Misc::svCheats);
+	if (Settings::Misc::svCheats)
+		ConVarSpoofing::Acquire(ConVarSpoofing::cheats, "sv_cheats");
+
+	// static_cast<int>: intValue is int32_t and the settings are bool -- see
+	// the note above the fullbright check.
+	if (ConVarSpoofing::allowCsLua && ConVarSpoofing::allowCsLua->m_pOriginalCVar->intValue != static_cast<int>(Settings::Misc::svAllowCsLua))
+		ConVarSpoofing::allowCsLua->m_pOriginalCVar->SetValue(Settings::Misc::svAllowCsLua);
+
+	if (ConVarSpoofing::cheats && ConVarSpoofing::cheats->m_pOriginalCVar->intValue != static_cast<int>(Settings::Misc::svCheats))
+		ConVarSpoofing::cheats->m_pOriginalCVar->SetValue(Settings::Misc::svCheats);
 
 	//Input->cameraoffset
 
@@ -108,10 +123,14 @@ ClientFrameStage_t stage)
 			}
 		}
 	}
-	bool thirdpKeyDown = false;
-	getKeyState(Settings::Misc::thirdpersonKey, Settings::Misc::thirdpersonKeyStyle, &thirdpKeyDown);
-	bool freecamKeyDown = false;
-	getKeyState(Settings::Misc::freeCamKey, Settings::Misc::freeCamKeyStyle, &freecamKeyDown);
+	// Shares Settings::Misc::thirdpersonKeyState / freeCamKeyState with
+	// RenderView.h.  Under the old macro each of the two hooks kept its own
+	// toggle latch, so in toggle mode this hook and the camera hook could
+	// disagree about whether the feature was on.
+	const bool thirdpKeyDown = PollKey(Settings::Misc::thirdpersonKey,
+		Settings::Misc::thirdpersonKeyStyle, Settings::Misc::thirdpersonKeyState);
+	const bool freecamKeyDown = PollKey(Settings::Misc::freeCamKey,
+		Settings::Misc::freeCamKeyStyle, Settings::Misc::freeCamKeyState);
 
 	bool needsSetViewAngles = (Settings::Misc::thirdperson && thirdpKeyDown) || (Settings::Misc::freeCam && freecamKeyDown);
 

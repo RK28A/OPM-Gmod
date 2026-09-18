@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <string>
+#include <string_view>
 #include <iostream>
 #include <fstream>
 #include <thread>
@@ -25,11 +26,27 @@
 #include "hacks/ConVarSpoofing.h"
 #include "engine/inetmessage.h"
 
+// Resolves one signature-scanned pointer, keeping the null out of the
+// arithmetic.  findPattern(...) + OFFSET and
+// GetRealFromRelative(findPattern(...), ...) both read through the result,
+// so a failed scan used to crash here, one line *before* the `if
+// (Globals::bSendpacket)` guards the review added downstream, which is why
+// those guards never fired.
+static char* ResolveScan(const char* module, std::string_view pattern, std::string_view name,
+    int preOffset, int offset, int instructionSize, bool relative = true)
+{
+    const char* match = findPattern(module, pattern, name);
+    if (!match)
+        return nullptr; // findPattern has already recorded the failure
+
+    return GetRealFromRelative((char*)match + preOffset, offset, instructionSize, relative);
+}
+
 // Installs a VMT hook, but first checks the target object and the specific
-// vtable slot are actually mapped, and logs the outcome by name. After a
+// vtable slot are actually mapped, and logs the outcome by name.  After a
 // Garry's Mod update a hard-coded offset/scan can resolve an interface to a
 // wild pointer; hooking through it used to take the whole game down (the
-// RenderView hook was the usual casualty). Now it is logged and skipped, so
+// RenderView hook was the usual casualty).  Now it is logged and skipped, so
 // the rest of the module still loads and debug.log points at the stale offset.
 template<typename T>
 static T GuardedVMTHook(const char* name, PVOID** src, PVOID dst, int index, bool noRestore = false)
@@ -46,7 +63,12 @@ static T GuardedVMTHook(const char* name, PVOID** src, PVOID dst, int index, boo
 void Main()
 {
     ZeroMemory(Settings::ScriptInput, sizeof(Settings::ScriptInput));
-    srand(time(nullptr));
+
+    // Still needed: the movement optimiser in Misc.h calls rand() directly, and
+    // so does tier0/Vector.h's Random().  The two call sites this project owns
+    // (RandomString and the anti-aim patterns) moved to <random>, but leaving
+    // these unseeded would make them produce the same sequence every launch.
+    srand(static_cast<unsigned int>(time(nullptr)));
 #ifdef _DEBUG
     AllocConsole();
     FILE* f;
@@ -64,12 +86,56 @@ void Main()
 
     ConPrint("Successfully injected!", Color(0, 255, 0));
     ConfigSystem::HandleConfig("Default", ConfigSystem::configHandle::Load);
-    Globals::bSendpacket = (bool*)(GetRealFromRelative((char*)findPattern("engine", CL_MovePattern, "CL_MOVE"), 0x1, 5) + BSendPacketOffset);
-    Globals::predictionRandomSeed = (unsigned int*)(GetRealFromRelative((char*)findPattern("client", PredictionSeedPattern, "predictionRandomSeed") + 0x3, 0x2, 6));
-    Globals::hostName = (char*)(GetRealFromRelative((char*)findPattern("client", HostNamePattern, "HostName"), 0x3, 7));
-    MoveHelper = (GetRealFromRelative((char*)findPattern("client", MoveHelperPattern, "MoveHelper"), 0x3, 7)); // https://i.imgur.com/p3C93PT.png
-    DWORD originalProtection;
-    VirtualProtect(Globals::bSendpacket, sizeof(bool), PAGE_EXECUTE_READWRITE, &originalProtection);
+
+    // Every scan first, then one check.  Nothing is installed if any of them
+    // failed: a half-resolved module is a crash waiting for the first frame,
+    // and reporting all four at once is what makes a game update diagnosable.
+    char* sendPacket = ResolveScan("engine", CL_MovePattern, "CL_MOVE", 0, 0x1, 5);
+    Globals::bSendpacket = sendPacket ? (bool*)(sendPacket + BSendPacketOffset) : nullptr;
+
+    // These three are x64-only in globals.hpp: PredictionSeedPattern,
+    // HostNamePattern and MoveHelperPattern are undefined for Win32 (the
+    // upstream baseline never provided x86 signatures for them, and MSBuild
+    // Win32 never ran to notice).  In a Win32 build the pointers stay null and
+    // the null-guards downstream keep the affected features (prediction, fake
+    // lag path, script dumper's host label, movement replay) off.  Left in
+    // place until someone re-reverses the signatures for the x86 build.
+#ifdef _WIN64
+    Globals::predictionRandomSeed = (unsigned int*)ResolveScan("client", PredictionSeedPattern, "predictionRandomSeed", 0x3, 0x2, 6);
+    Globals::hostName = ResolveScan("client", HostNamePattern, "HostName", 0, 0x3, 7);
+    MoveHelper = ResolveScan("client", MoveHelperPattern, "MoveHelper", 0, 0x3, 7); // https://i.imgur.com/p3C93PT.png
+#else
+    Globals::predictionRandomSeed = nullptr;
+    Globals::hostName = nullptr;
+    MoveHelper = nullptr;
+#endif
+
+    present = ResolveScan(PresentModule, PresentPattern, "Present", 0, 0x2, 6, false);
+
+    if (!missingPatterns.empty())
+    {
+        std::string report = "Signature scan failed for:";
+        for (const std::string& name : missingPatterns)
+            report += " " + name;
+
+        report += " -- the game has probably updated.  Nothing was hooked.";
+        ConPrint(report.c_str(), Color(255, 80, 80));
+        return;
+    }
+
+    // The protection was changed and never put back, leaving a page of
+    // engine.dll permanently PAGE_EXECUTE_READWRITE.  BytePatch and VMTHook both
+    // restore theirs; this one did not.
+    // It has to stay writable for the whole session -- bSendpacket is written
+    // on most frames -- so this cannot be restored straight away.  What it does
+    // not need is execute permission: the page was left PAGE_EXECUTE_READWRITE
+    // for good, where BytePatch and VMTHook both restore theirs.  The saved
+    // value is put back by PerformUnload.
+    if (!VirtualProtect(Globals::bSendpacket, sizeof(bool), PAGE_READWRITE, &Globals::bSendpacketProtection))
+    {
+        Globals::bSendpacketProtection = 0;
+        ConPrint("Could not make bSendpacket writable", Color(255, 200, 0));
+    }
     
     EngineClient = (CEngineClient*)GetInterface("engine.dll", "VEngineClient015");
     LuaShared = (CLuaShared*)GetInterface("lua_shared.dll", "LUASHARED003");
@@ -155,8 +221,6 @@ void Main()
     oProcessGMOD_ServerToClient = GuardedVMTHook< _ProcessGMOD_ServerToClient>("ProcessGMOD_ServerToClient", (PVOID**)ClientState, (PVOID)hkProcessGMOD_ServerToClient, 64);
     oRunCommand = GuardedVMTHook< _RunCommand>("RunCommand", (PVOID**)Prediction, (PVOID)hkRunCommand, 19);
     oPaint = GuardedVMTHook<_Paint>("Paint", (PVOID**)EngineVGui, (PVOID)hkPaint, 13);
-
-    present = GetRealFromRelative((char*)findPattern(PresentModule, PresentPattern, "Present"), 0x2, 6, false);
 
     // Owns the listeners, registers them once, and reports a failure instead of
     // assuming AddListener() worked.  They used to be raw `new` results parked

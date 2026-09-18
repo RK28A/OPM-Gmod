@@ -1,5 +1,7 @@
 #include "Memory.h"
 
+#include <random>
+
 void BytePatch(PVOID source, BYTE newValue)
 {
     DWORD originalProtection;
@@ -8,24 +10,37 @@ void BytePatch(PVOID source, BYTE newValue)
     VirtualProtect(source, sizeof(PVOID), originalProtection, &originalProtection);
 }
 
-void RestoreVMTHook(PVOID** src, PVOID dst, int index)
+std::vector<hookData> vmtHooks;
+
+// `original` rather than `dst`: this writes the *saved* function back, and the
+// parameter carrying it was named as though it were the detour.
+void RestoreVMTHook(PVOID** src, PVOID original, int index)
 {
+    if (!src || !*src || index < 0)
+        return;
+
     PVOID* VMT = *src;
-    PVOID ret = (VMT[index]);
     DWORD originalProtection;
-    VirtualProtect(&VMT[index], sizeof(PVOID), PAGE_EXECUTE_READWRITE, &originalProtection);
-    VMT[index] = dst;
+    if (!VirtualProtect(&VMT[index], sizeof(PVOID), PAGE_EXECUTE_READWRITE, &originalProtection))
+        return;
+
+    VMT[index] = original;
     VirtualProtect(&VMT[index], sizeof(PVOID), originalProtection, &originalProtection);
 }
-std::vector<hookData> vmtHooks;
+
 void RestoreVMTHooks()
 {
-    for (int i = 0; i < vmtHooks.size(); i++)
-    {
-        auto currData = vmtHooks[i];
-        RestoreVMTHook(currData.src, currData.dst, currData.index);
-    }
+    // Reverse order, so a vtable entry hooked twice ends up holding the value it
+    // had before the first hook rather than before the last.
+    for (std::size_t i = vmtHooks.size(); i-- > 0; )
+        RestoreVMTHook(vmtHooks[i].src, vmtHooks[i].original, vmtHooks[i].index);
+
+    // Cleared, so a second unload is a no-op instead of replaying every restore
+    // against vtables that may since have been replaced.
+    vmtHooks.clear();
 }
+
+std::vector<std::string> missingPatterns;
 
  // credits to osiris for the following
 static auto generateBadCharTable(std::string_view pattern) noexcept
@@ -44,8 +59,18 @@ static auto generateBadCharTable(std::string_view pattern) noexcept
 
     return table;
 }
-const char* findPattern(const char* moduleName, std::string_view pattern, std::string patternName) noexcept
+
+// Returns nullptr when the scan fails, and records the name so the caller can
+// report every failure at once.
+//
+// It used to pop a MessageBoxA -- from whatever thread happened to be running,
+// which during start-up is a detached thread inside DllMain's shadow -- and then
+// return 0 into arithmetic that dereferences it (see GetRealFromRelative).
+const char* findPattern(const char* moduleName, std::string_view pattern, std::string_view patternName) noexcept
 {
+    if (pattern.empty())
+        return nullptr;
+
     PVOID moduleBase = 0;
     std::size_t moduleSize = 0;
     if (HMODULE handle = GetModuleHandleA(moduleName))
@@ -55,33 +80,54 @@ const char* findPattern(const char* moduleName, std::string_view pattern, std::s
             moduleSize = moduleInfo.SizeOfImage;
         }
 
-
-    if (moduleBase && moduleSize) {
-        int lastIdx = pattern.length() - 1;
+    if (moduleBase && moduleSize >= pattern.length()) {
+        const std::size_t lastIdx = pattern.length() - 1;
         const auto badCharTable = generateBadCharTable(pattern);
 
         auto start = static_cast<const char*>(moduleBase);
         const auto end = start + moduleSize - pattern.length();
 
         while (start <= end) {
-            int i = lastIdx;
-            while (i >= 0 && (pattern[i] == '?' || start[i] == pattern[i]))
-                --i;
-
-            if (i < 0)
+            std::size_t i = lastIdx;
+            for (;;)
             {
-                return start;
+                if (pattern[i] != '?' && start[i] != pattern[i])
+                    break;
+
+                if (i == 0)
+                    return start;
+
+                --i;
             }
 
             start += badCharTable[static_cast<std::uint8_t>(start[lastIdx])];
         }
     }
-    std::string toPrint = "Failed to find pattern\"" + patternName + "\", let the dev know ASAP!";
-    MessageBoxA(NULL, toPrint.c_str(), "ERROR", MB_OK | MB_ICONWARNING);
-    return 0;
+
+    try
+    {
+        missingPatterns.emplace_back(patternName);
+    }
+    catch (...)
+    {
+        // Reporting a failed scan must not itself throw out of a noexcept
+        // function.
+    }
+
+    return nullptr;
 }
-char* GetRealFromRelative(char* address, int offset, int instructionSize, bool isRelative) // Address must be an instruction, not a pointer! And offset = the offset to the bytes you want to retrieve.
+
+// Address must be an instruction, not a pointer!  And offset = the offset to the
+// bytes you want to retrieve.
+//
+// Returns nullptr for a null address instead of reading through it: the callers
+// feed this straight from findPattern(), whose failure value is null, and the
+// null checks that were added downstream all sat *after* this dereference.
+char* GetRealFromRelative(char* address, int offset, int instructionSize, bool isRelative)
 {
+    if (!address)
+        return nullptr;
+
 #ifdef _WIN64
     isRelative = true;
 #endif
@@ -105,11 +151,25 @@ char* GetRealFromRelative(char* address, int offset, int instructionSize, bool i
     return realAddress;
 }
 
+// rand() % (length - 1) never produced the last character of the alphabet --
+// '9' was unreachable -- and rand() shares global state with anything else in
+// the process that seeds it.
 std::string RandomString(int length)
 {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    if (length <= 0)
+        return std::string();
+
+    static std::mt19937 engine{ std::random_device{}() };
+    std::uniform_int_distribution<std::size_t> distribution(0, alphabet.size() - 1);
+
     std::string output;
-    std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    output.reserve(static_cast<std::size_t>(length));
+
     for (int i = 0; i < length; i++)
-        output += alphabet[rand() % (alphabet.length() - 1)];
+        output += alphabet[distribution(engine)];
+
     return output;
 }

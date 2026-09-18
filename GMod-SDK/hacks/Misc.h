@@ -7,6 +7,7 @@
 // "ImGui/imgui-notify/..." form only resolved through the Visual Studio include
 // directories and broke as soon as the project was built another way.
 #include "../ImGui/imgui-notify/imgui_notify.h"
+#include "../core/StringUtil.h"
 
 #include <array>
 #include <iostream>
@@ -122,7 +123,11 @@ public:
                 const std::string message = notify::Format("%s attacked %s. NEW HP: %i",
                     attackerName.c_str(), targetName.c_str(), event->GetInt("health"));
 
+                // AllocConsole() is #ifdef _DEBUG, so in a Release build this
+                // wrote to a handle that was never opened -- once per hit.
+#ifdef _DEBUG
                 std::cout << message << std::endl;
+#endif
 
                 notify::Toast toast(notify::Type::Info, 3000);
                 toast.SetTitle("Damage");
@@ -288,15 +293,22 @@ void SpectatorList()
             if (entity->GetObserverTarget() != localPlayer)
                 continue;
 
-            player_info_s info;
-            EngineClient->GetPlayerInfo(i, &info);
+            // Zero-initialised and checked, like every other GetPlayerInfo
+            // call site the review touched -- this one was missed, so a failed
+            // lookup fed std::string() an unterminated stack buffer.
+            player_info_s info{};
+            if (!EngineClient->GetPlayerInfo(i, &info))
+                continue;
 
-            names += std::string(info.name) + "\n";
+            names += strutil::FromBounded(info.name, sizeof(info.name)) + "\n";
         }
         ImGui::GetStyle().ItemSpacing = ImVec2(4, 2);
         ImGui::GetStyle().WindowPadding = ImVec2(4, 4);
         ImGui::SameLine(15.f);
-        ImGui::Text(names.c_str());
+        // names holds player nicknames, which come off the wire: passing it as
+        // the *format* made "%s" in a nickname a read of the varargs that are
+        // not there.  TextUnformatted takes it as text.
+        ImGui::TextUnformatted(names.c_str());
 
     }
     ImGui::End();
