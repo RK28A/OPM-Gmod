@@ -1,0 +1,43 @@
+name: LagControl
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["LagControl/**", ".github/workflows/lagcontrol.yml"]
+  pull_request:
+    paths: ["LagControl/**", ".github/workflows/lagcontrol.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Tests + LagControl.exe
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: LagControl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Unit tests
+        run: python -m unittest discover tests -v
+
+      - name: Import check
+        run: python -c "import lagcontrol.gui, lagcontrol.engine as e; assert e.LagEngine.available(), e.LagEngine.unavailable_reason()"
+
+      - name: Build executable
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin
+          --name LagControl --collect-all customtkinter --collect-all pydivert main.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LagControl-windows
+          path: LagControl/dist/LagControl.exe
+          if-no-files-found: error
