@@ -9,35 +9,31 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Tests + LagControl.exe
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: LagControl
+  core-tests:
+    name: Core tests (gcc + sanitizers)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Build and run
+        working-directory: LagControl/tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -I../src core_tests.cpp -o core_tests
+          ./core_tests
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt pyinstaller
-
-      - name: Unit tests
-        run: python -m unittest discover tests -v
-
-      - name: Import check
-        run: python -c "import lagcontrol.gui, lagcontrol.engine as e; assert e.LagEngine.available(), e.LagEngine.unavailable_reason()"
-
-      - name: Build executable
-        run: >
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin
-          --name LagControl --collect-all customtkinter --collect-all pydivert main.py
-
+  build:
+    name: LagControl.exe (MSVC x64, build.bat)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build.bat
+        shell: cmd
+        working-directory: LagControl
+        run: build.bat
       - uses: actions/upload-artifact@v4
         with:
-          name: LagControl-windows
-          path: LagControl/dist/LagControl.exe
+          name: LagControl-windows-x64
+          path: |
+            LagControl/dist/LagControl.exe
+            LagControl/dist/WinDivert.dll
+            LagControl/dist/WinDivert64.sys
           if-no-files-found: error
