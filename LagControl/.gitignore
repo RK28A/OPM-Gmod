@@ -1,3 +1,4 @@
 build/
 dist/
-*.spec
+third_party/WinDivert-*/
+third_party/*.zip

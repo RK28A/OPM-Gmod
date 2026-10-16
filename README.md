@@ -88,7 +88,7 @@ make asan               # la même suite sous ASan + UBSan
 | `GMod-SDK/hacks` | Fonctionnalités et menu |
 | `GMod-SDK/ImGui` | ImGui, backend DX9/Win32 et notifications |
 | `tests` | Tests hôte des composants portables |
-| `LagControl` | Outil Windows séparé : latence réseau ciblée sur une application (voir [son README](LagControl/README.md)) |
+| `LagControl` | Outil Windows séparé (C++ / ImGui) : latence réseau ciblée sur une application, voir [son README](LagControl/README.md) |
 
 ## Licence
 
